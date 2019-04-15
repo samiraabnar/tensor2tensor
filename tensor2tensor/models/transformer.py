@@ -52,6 +52,8 @@ from tensorflow.python.util import nest
 transformer_prepare_encoder = transformer_layers.transformer_prepare_encoder
 transformer_encoder = transformer_layers.transformer_encoder
 transformer_ffn_layer = transformer_layers.transformer_ffn_layer
+transformer_bottomup_encoder = transformer_layers.transformer_bottomup_encoder
+
 
 
 def transformer_encode(encoder_function, inputs, target_space, hparams,
@@ -1274,6 +1276,33 @@ class TransformerEncoder(t2t_model.T2TModel):
 
     return encoder_output
 
+
+@registry.register_model
+class BottomupTransformerEncoder(t2t_model.T2TModel):
+  """Bottomup Transformer encoder only."""
+
+  def body(self, features):
+    hparams = self._hparams
+    inputs = features["inputs"]
+    target_space = features["target_space_id"]
+
+    inputs = common_layers.flatten4d3d(inputs)
+
+    (encoder_input, encoder_self_attention_bias, _) = (
+        transformer_prepare_encoder(inputs, target_space, hparams))
+
+    encoder_input = tf.nn.dropout(encoder_input,
+                                  1.0 - hparams.layer_prepostprocess_dropout)
+    encoder_output,  encoder_output_presence = transformer_bottomup_encoder(
+        encoder_input,
+        encoder_self_attention_bias,
+        hparams,
+        nonpadding=features_to_nonpadding(features, "inputs"))
+
+    tf.summary.histogram("encoder_output_presence", encoder_output_presence)
+    encoder_output = tf.expand_dims(encoder_output, 2)
+
+    return encoder_output
 
 @registry.register_model
 class TransformerRegressor(TransformerEncoder):

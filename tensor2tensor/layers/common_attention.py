@@ -1483,7 +1483,6 @@ def harden_attention_weights(weights, hard_attention_k):
   weights /= weights_sum
   return weights
 
-
 def dot_product_attention(q,
                           k,
                           v,
@@ -1498,6 +1497,68 @@ def dot_product_attention(q,
                           weight_dtype=None,
                           hard_attention_k=0):
   """Dot-product attention.
+  Args:
+    q: Tensor with shape [..., length_q, depth_k].
+    k: Tensor with shape [..., length_kv, depth_k]. Leading dimensions must
+      match with q.
+    v: Tensor with shape [..., length_kv, depth_v] Leading dimensions must
+      match with q.
+    bias: bias Tensor (see attention_bias())
+    dropout_rate: a float.
+    image_shapes: optional tuple of integer scalars.
+      see comments for attention_image_summary()
+    name: an optional string
+    make_image_summary: True if you want an image summary.
+    save_weights_to: an optional dictionary to capture attention weights
+      for visualization; the weights tensor will be appended there under
+      a string key created from the variable scope (including name).
+    dropout_broadcast_dims: an optional list of integers less than rank of q.
+      Specifies in which dimensions to broadcast the dropout decisions.
+    activation_dtype: Used to define function activation dtype when using
+      mixed precision.
+    weight_dtype: The dtype weights are stored in when using mixed precision
+    hard_attention_k: integer, if > 0 triggers hard attention (picking top-k)
+  Returns:
+    Tensor with shape [..., length_q, depth_v].
+  """
+  with tf.variable_scope(
+      name, default_name="dot_product_attention", values=[q, k, v]) as scope:
+    logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
+    if bias is not None:
+      bias = common_layers.cast_like(bias, logits)
+      logits += bias
+    # If logits are fp16, upcast before softmax
+    logits = maybe_upcast(logits, activation_dtype, weight_dtype)
+    weights = tf.nn.softmax(logits, name="attention_weights")
+    if hard_attention_k > 0:
+      weights = harden_attention_weights(weights, hard_attention_k)
+    weights = common_layers.cast_like(weights, q)
+    if save_weights_to is not None:
+      save_weights_to[scope.name] = weights
+      save_weights_to[scope.name + "/logits"] = logits
+    # Drop out attention links for each head.
+    weights = common_layers.dropout_with_broadcast_dims(
+        weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+    if common_layers.should_generate_summaries() and make_image_summary:
+      attention_image_summary(weights, image_shapes)
+    return tf.matmul(weights, v)
+
+
+def bottom_up_dot_product_attention(q,
+                          k,
+                          v,
+                          bias,
+                          presence_q=None,
+                          presence_k=None,
+                          dropout_rate=0.0,
+                          image_shapes=None,
+                          name=None,
+                          make_image_summary=True,
+                          save_weights_to=None,
+                          dropout_broadcast_dims=None,
+                          activation_dtype=None,
+                          weight_dtype=None):
+  """Bottom-up dot-product attention.
 
   Args:
     q: Tensor with shape [..., length_q, depth_k].
@@ -1525,17 +1586,39 @@ def dot_product_attention(q,
     Tensor with shape [..., length_q, depth_v].
   """
   with tf.variable_scope(
-      name, default_name="dot_product_attention", values=[q, k, v]) as scope:
+      name, default_name="bottom_up_dot_product_attention",
+          values=[q, k, v]) as scope:
     logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
       bias = common_layers.cast_like(bias, logits)
       logits += bias
     # If logits are fp16, upcast before softmax
     logits = maybe_upcast(logits, activation_dtype, weight_dtype)
-    weights = tf.nn.softmax(logits, name="attention_weights")
-    if hard_attention_k > 0:
-      weights = harden_attention_weights(weights, hard_attention_k)
-    weights = common_layers.cast_like(weights, q)
+
+    number_of_heads = common_layers.shape_list(logits)[1]
+    length_q = common_layers.shape_list(q)[-2]
+    length_kv = common_layers.shape_list(k)[-2]
+
+    if presence_q is None:  # [batch_size, length_q, 1]
+      presence_q = tf.ones(shape=(tf.shape(q)[0], length_q, 1))
+
+    if presence_k is None: # [batch_size, length_kv, 1]
+      presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1))
+
+    # [batch_size, heads, length_q, length_kv]
+    # we incorporate the presence of q before softmax
+    logits *= tf.tile(tf.expand_dims(presence_q, axis=1),
+                      [1, number_of_heads, 1, length_kv])
+
+    # softmax over q axis (instad of k, i.e. axis = -1)
+    weights = tf.nn.softmax(logits, axis=-2, name="attention_weights")
+
+    # we incorporate the presence of k after softmax
+    weights *= tf.tile(tf.expand_dims(
+                  tf.transpose(presence_k, [0,2,1]), axis=1),
+                      [1, number_of_heads, length_q, 1],
+                       name="attention_weights_scaled_with_k_presence_probs")
+
     if save_weights_to is not None:
       save_weights_to[scope.name] = weights
       save_weights_to[scope.name + "/logits"] = logits
@@ -1544,7 +1627,15 @@ def dot_product_attention(q,
         weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
     if common_layers.should_generate_summaries() and make_image_summary:
       attention_image_summary(weights, image_shapes)
-    return tf.matmul(weights, v)
+
+    # [batch_size, heads length_q, length_kv] ->
+    # [batch_size, length_q, length_kv]
+    aggregate_weights_over_heads = tf.reduce_sum(weights, axis=1)
+    # [batch_size, length_q, length_kv] -> [batch_size, length_q, 1]
+    total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
+    new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
+
+    return tf.matmul(weights, v), new_q_presence
 
 
 def _generate_relative_positions_matrix(length_q, length_k,
@@ -3968,6 +4059,8 @@ def multihead_attention(query_antecedent,
                         num_heads,
                         dropout_rate,
                         attention_type="dot_product",
+                        presence_k=None,
+                        presence_q = None,
                         max_relative_position=None,
                         heads_share_relative_embedding=False,
                         add_relative_to_values=False,
@@ -4177,6 +4270,22 @@ def multihead_attention(query_antecedent,
           dropout_broadcast_dims=dropout_broadcast_dims,
           activation_dtype=kwargs.get("activation_dtype"),
           hard_attention_k=hard_attention_k)
+
+    elif attention_type == "bottom_up_dot_product":
+      if presence_k is None and presence_q is not None:
+        # i.e. self-attention, not enc-dec attention
+        presence_k = presence_q
+      x = bottom_up_dot_product_attention(
+          q, k, v, bias,
+          presence_q,
+          presence_k,
+          dropout_rate,
+          image_shapes,
+          save_weights_to=save_weights_to,
+          make_image_summary=make_image_summary,
+          dropout_broadcast_dims=dropout_broadcast_dims,
+          activation_dtype=kwargs.get("activation_dtype"))
+
     elif attention_type == "dot_product_relative":
       x = dot_product_attention_relative(
           q,
