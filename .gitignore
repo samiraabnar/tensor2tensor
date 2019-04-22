@@ -27,3 +27,8 @@ logs
 data
 logs/*
 data/*
+output
+output/*
+*.gz
+*.zip
+*.tgz
