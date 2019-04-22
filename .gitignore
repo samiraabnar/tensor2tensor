@@ -22,3 +22,8 @@ dist/
 
 # Other
 *.DS_Store
+
+logs
+data
+logs/*
+data/*

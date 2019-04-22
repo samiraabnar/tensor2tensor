@@ -288,7 +288,7 @@ def transformer_bottomup_encoder(encoder_input,
     pad_remover = None
     if hparams.use_pad_remover and not common_layers.is_xla_compiled():
       pad_remover = expert_utils.PadRemover(padding)
-    presence_y = None,
+    presence_y = None
     for layer in range(hparams.num_encoder_layers or hparams.num_hidden_layers):
       with tf.variable_scope("layer_%d" % layer):
         with tf.variable_scope("self_attention"):
@@ -301,7 +301,7 @@ def transformer_bottomup_encoder(encoder_input,
               hparams.hidden_size,
               hparams.num_heads,
               hparams.attention_dropout,
-              attention_type=hparams.self_attention_type,
+              attention_type="bottom_up_dot_product",
               presence_k=None,
               presence_q=presence_y,
               max_relative_position=hparams.max_relative_position,

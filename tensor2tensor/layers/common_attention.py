@@ -1607,6 +1607,8 @@ def bottom_up_dot_product_attention(q,
 
     # [batch_size, heads, length_q, length_kv]
     # we incorporate the presence of q before softmax
+    tf.logging.info("presence_q")
+    tf.logging.info(presence_q)
     logits *= tf.tile(tf.expand_dims(presence_q, axis=1),
                       [1, number_of_heads, 1, length_kv])
 
@@ -1635,7 +1637,7 @@ def bottom_up_dot_product_attention(q,
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
     new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
 
-    return tf.matmul(weights, v), new_q_presence
+    return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
 
 
 def _generate_relative_positions_matrix(length_q, length_k,
@@ -4258,10 +4260,12 @@ def multihead_attention(query_antecedent,
       q *= key_depth_per_head**-0.5
 
     additional_returned_value = None
+    return_additional_returned_value = False
     if callable(attention_type):  # Generic way to extend multihead_attention
       x = attention_type(q, k, v, **kwargs)
       if isinstance(x, tuple):
         x, additional_returned_value = x  # Unpack
+        return_additional_returned_value = True
     elif attention_type == "dot_product":
       x = dot_product_attention(
           q, k, v, bias, dropout_rate, image_shapes,
@@ -4272,10 +4276,11 @@ def multihead_attention(query_antecedent,
           hard_attention_k=hard_attention_k)
 
     elif attention_type == "bottom_up_dot_product":
+      return_additional_returned_value = True
       if presence_k is None and presence_q is not None:
         # i.e. self-attention, not enc-dec attention
         presence_k = presence_q
-      x = bottom_up_dot_product_attention(
+      x, additional_returned_value = bottom_up_dot_product_attention(
           q, k, v, bias,
           presence_q,
           presence_k,
@@ -4357,7 +4362,10 @@ def multihead_attention(query_antecedent,
       assert attention_type == "unmasked_dilated_1d"
       x = dilated_self_attention_1d(q, k, v, block_length, block_width,
                                     gap_size, num_memory_blocks)
+
+
     x = combine_heads(x)
+
 
     # Set last dim specifically.
     x.set_shape(x.shape.as_list()[:-1] + [total_value_depth])
