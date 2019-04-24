@@ -19,11 +19,14 @@ cd /home/samigpu/Codes/tensor2tensor
 conda activate myt2t
 HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 
-DATA_DIR=$HEAD_DIR/data
+DATA_DIR=$HEAD_DIR/data/sentiment/
 LOGS_DIR=$HEAD_DIR/logs
+MODEL=transformer_encoder
+HPARAM=transformer_tiny
+PROBLEM=sentiment_imdb
 
-t2t-trainer   --data_dir=$DATA_DIR/sentiment/   \
---problem=sentiment_imdb  \
---model=transformer_encoder \
---hparams_set=transformer_tiny \
---log_dir=$LOGS_DIR
+t2t-trainer   --data_dir=$DATA_DIR   \
+--problem=$PROBLEM  \
+--model=$MODEL \
+--hparams_set=$HPARAM \
+--output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM
