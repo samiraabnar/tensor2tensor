@@ -26,4 +26,4 @@ t2t-trainer   --data_dir=$DATA_DIR/sentiment/   \
 --problem=sentiment_imdb  \
 --model=transformer_encoder \
 --hparams_set=transformer_tiny \
---output_dir=$LOGS_DIR
+--log_dir=$LOGS_DIR
