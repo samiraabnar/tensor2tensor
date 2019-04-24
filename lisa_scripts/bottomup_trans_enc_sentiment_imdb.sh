@@ -17,7 +17,7 @@ export LD_LIBRARY_PATH=$CUDA_HOME/lib64:/hpc/eb/Debian/cuDNN/7.3.1-CUDA-10.0.130
 cd /home/samigpu/Codes/tensor2tensor
 
 conda activate myt2t
-$HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
+HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 
 DATA_DIR=$HEAD_DIR/data
 LOGS_DIR=$HEAD_DIR/logs
