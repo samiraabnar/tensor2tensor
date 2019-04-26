@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=attention_arithmatic
+#SBATCH --job-name=bottomup_attention_arithmatic
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --ntasks-per-node=1

@@ -21,7 +21,7 @@ HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 
 DATA_DIR=$HEAD_DIR/data/sentiment_sst_b/
 LOGS_DIR=$HEAD_DIR/logs
-MODEL=buttomup_transformer_encoder
+MODEL=bottomup_transformer_encoder
 HPARAM=transformer_tiny
 PROBLEM=sentiment_sst_binary
 
