@@ -5,6 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=5:00:00
 #SBATCH --partition=gpu
+#SBATCH --mem=60G
 
 module load eb
 module load Python/3.6.3-foss-2017b
