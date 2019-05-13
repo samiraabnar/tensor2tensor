@@ -2,7 +2,6 @@
 
 #SBATCH --job-name=attention_image_mnist
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
 #SBATCH --time=5:00:00
 #SBATCH --partition=gpu
 #SBATCH --mem=60G
@@ -26,6 +25,7 @@ PROBLEM=image_mnist
 
 t2t-trainer   --data_dir=$DATA_DIR   \
 --problem=$PROBLEM  \
+--hparams='batch_size=512' \
 --model=$MODEL \
 --hparams_set=$HPARAM \
 --output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM

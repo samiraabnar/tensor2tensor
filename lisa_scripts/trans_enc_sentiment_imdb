@@ -27,6 +27,7 @@ PROBLEM=sentiment_imdb
 
 t2t-trainer   --data_dir=$DATA_DIR   \
 --problem=$PROBLEM  \
+--hparams='batch_size=512' \
 --model=$MODEL \
 --hparams_set=$HPARAM \
 --output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM

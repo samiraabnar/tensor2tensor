@@ -233,7 +233,7 @@ def transformer_bottomup_encoder(encoder_input,
                             make_image_summary=True,
                             losses=None,
                             attn_bias_for_padding=None):
-  """A stack of transformer layers.
+  """A stack of transformer layers with reversed attention.
 
   Args:
     encoder_input: a Tensor
