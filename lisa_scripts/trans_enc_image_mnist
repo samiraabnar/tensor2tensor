@@ -3,11 +3,8 @@
 #SBATCH --job-name=attention_image_mnist
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --ntasks-per-node=1
 #SBATCH --time=5:00:00
-#SBATCH --partition=gpu_shared
-#SBATCH --gres=gpu:2
-#SBATCH --mem=60G
+#SBATCH --partition=gpu
 
 module load eb
 module load Python/3.6.3-foss-2017b
