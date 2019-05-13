@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=attention_arithmatic
+#SBATCH --job-name=attention_imdb
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --ntasks-per-node=1
@@ -22,7 +22,7 @@ HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 DATA_DIR=$HEAD_DIR/data/sentiment/
 LOGS_DIR=$HEAD_DIR/logs
 MODEL=bottomup_transformer_encoder
-HPARAM=transformer_tiny
+HPARAM=transformer_base
 PROBLEM=sentiment_imdb
 
 t2t-trainer   --data_dir=$DATA_DIR   \

@@ -22,7 +22,7 @@ HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 DATA_DIR=$HEAD_DIR/data/sentiment/
 LOGS_DIR=$HEAD_DIR/logs
 MODEL=transformer_encoder
-HPARAM=transformer_tiny
+HPARAM=transformer_base
 PROBLEM=sentiment_imdb
 
 t2t-trainer   --data_dir=$DATA_DIR   \
