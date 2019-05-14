@@ -1302,7 +1302,7 @@ class BottomupTransformerEncoder(t2t_model.T2TModel):
     tf.summary.histogram("encoder_output_presence", encoder_output_presence)
     encoder_output = tf.expand_dims(encoder_output, 2)
 
-    return encoder_output
+    return tf.multiply(encoder_output, encoder_output_presence)
 
 @registry.register_model
 class TransformerRegressor(TransformerEncoder):
