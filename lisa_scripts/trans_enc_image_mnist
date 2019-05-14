@@ -4,6 +4,8 @@
 #SBATCH --ntasks=1
 #SBATCH --time=5:00:00
 #SBATCH --partition=gpu
+#SBATCH --mem=250G
+
 
 
 module load eb
@@ -25,7 +27,7 @@ PROBLEM=image_mnist
 
 t2t-trainer   --data_dir=$DATA_DIR   \
 --problem=$PROBLEM  \
---hparams='batch_size=32' \
+--hparams='batch_size=128' \
 --worker_gpu=4 \
 --model=$MODEL \
 --hparams_set=$HPARAM \
