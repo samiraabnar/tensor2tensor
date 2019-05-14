@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=attention_sentiment_sst_b
+#SBATCH --job-name=reverse_attention_sentiment_sst_b
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --ntasks-per-node=1
