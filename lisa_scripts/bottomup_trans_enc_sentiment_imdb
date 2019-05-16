@@ -29,4 +29,4 @@ t2t-trainer   --data_dir=$DATA_DIR   \
 --hparams='batch_size=128' \
 --worker_gpu=4 \
 --hparams_set=$HPARAM \
---output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM_trial1
+--output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM_trial2
