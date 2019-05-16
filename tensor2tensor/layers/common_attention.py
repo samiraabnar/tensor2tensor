@@ -1636,10 +1636,10 @@ def bottom_up_dot_product_attention(q,
     # weights = tf.identity(weights, name="attention_weights")
 
     if save_weights_to is not None:
-      save_weights_to[assignment_weights.name] = assignment_weights
-      save_weights_to[assignment_weights.name + "/logits"] = assignment_logits
-      save_weights_to[weights.name] = weights
-      save_weights_to[weights.name + "/logits"] = logits
+      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
+      save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
+      save_weights_to[scope.name+'/weights'] = weights
+      save_weights_to[scope.name+'/logits'] = logits
 
     # Drop out attention links for each head.
     weights = common_layers.dropout_with_broadcast_dims(
@@ -1658,8 +1658,8 @@ def bottom_up_dot_product_attention(q,
     new_q_presence = tf.nn.sigmoid(total_assigned_weight_per_q, name="presence_q")
 
     if save_weights_to is not None:
-      save_weights_to[new_q_presence.name] = new_q_presence
-      save_weights_to[new_q_presence.name+'/logits'] = total_assigned_weight_per_q
+      save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
+      save_weights_to[scope.name+'/q_presence_logits'] = total_assigned_weight_per_q
 
     return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
 
