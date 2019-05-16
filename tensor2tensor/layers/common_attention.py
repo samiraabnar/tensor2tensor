@@ -1619,6 +1619,7 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): play with softmax temperature
     assignment_weights = tf.nn.softmax(assignment_logits, axis=-2, name="assignment_weights")
 
+
     # we incorporate the presence of k (lower-layer nodes) after Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     logits = tf.identity(assignment_weights * tf.tile(tf.expand_dims(
@@ -1629,11 +1630,17 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): check if softmax is better or not to renormalize things
     # re-normalize the weights by applying Softmax over k axis
     # [batch_size, num_heads, length_q, length_kv]
-    weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
-    # weights = tf.cond(weights, lambda: weights,
-    #                   lambda: (weights / tf.expand_dims(tf.reduce_sum(
-    #                     weights, axis=-1), axis=-1)))
-    # weights = tf.identity(weights, name="attention_weights")
+    # weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
+
+
+    # TODO(dehghani): check if softmax is better or not to renormalize things
+    # re-normalize the weights by applying Softmax over k axis
+    # [batch_size, num_heads, length_q, length_kv]
+    # weights = tf.nn.softmax(weights, axis=-1, name="attention_weights")
+    weights = tf.where(tf.equal(logits, 0), logits,
+                       (logits / tf.expand_dims(tf.reduce_sum(
+                         logits, axis=-1), axis=-1)))
+    weights = tf.identity(weights, name="attention_weights")
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
