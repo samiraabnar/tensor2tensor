@@ -273,6 +273,84 @@ class UniversalTransformer(transformer.Transformer):
 
 
 @registry.register_model
+class BottomupUniversalTransformerEncoder(transformer.Transformer):
+  """Universal Transformer Encoder: Has no decoder (e.g.for classification)."""
+
+  def encode(self, inputs, target_space, hparams, features=None, losses=None):
+    """Encode transformer inputs.
+
+    Args:
+      inputs: Transformer inputs [batch_size, input_length, input_height,
+        hidden_dim] which will be flattened along the two spatial dimensions.
+      target_space: scalar, target space ID.
+      hparams: hyperparmeters for model.
+      features: optionally pass the entire features dictionary as well.
+        This is needed now for "packed" datasets.
+      losses: Unused.
+
+    Returns:
+      Tuple of:
+          encoder_output: Encoder representation.
+              [batch_size, input_length, hidden_dim]
+          encoder_extra_output: which is extra encoder output used in some
+            variants of the model (e.g. in ACT, to pass the ponder-time to body)
+    """
+    del losses
+    inputs = common_layers.flatten4d3d(inputs)
+
+    (encoder_input, self_attention_bias, _) = (
+        transformer.transformer_prepare_encoder(inputs, target_space, hparams))
+
+    encoder_input = tf.nn.dropout(encoder_input,
+                                  1.0 - hparams.layer_prepostprocess_dropout)
+
+    (encoder_output, encoder_extra_output) = (
+        universal_transformer_util.universal_transformer_encoder(
+            encoder_input,
+            self_attention_bias,
+            hparams,
+            nonpadding=transformer.features_to_nonpadding(features, "inputs"),
+            save_weights_to=self.attention_weights))
+
+    return encoder_output, encoder_extra_output
+
+  def body(self, features):
+    """Universal Transformer main model_fn.
+
+    Args:
+      features: Map of features to the model. Should contain the following:
+          "inputs": Transformer inputs [batch_size, input_length, hidden_dim]
+          "targets": Target decoder outputs.
+              [batch_size, decoder_length, hidden_dim]
+          "target_space_id"
+
+    Returns:
+      Final decoder representation. [batch_size, decoder_length, hidden_dim]
+    """
+    hparams = self._hparams
+
+    assert self.has_input, ("universal_transformer_encoder is applicable on "
+                            "problems with inputs")
+
+    inputs = features["inputs"]
+    target_space = features["target_space_id"]
+    encoder_output, enc_extra_output = self.encode(
+        inputs, target_space, hparams, features=features)
+
+    encoder_output = tf.expand_dims(encoder_output, 2)
+
+    if hparams.recurrence_type == "act" and hparams.act_loss_weight != 0:
+      ponder_times, remainders = enc_extra_output
+      act_loss = hparams.act_loss_weight * tf.reduce_mean(ponder_times +
+                                                          remainders)
+      tf.contrib.summary.scalar("act_loss", act_loss)
+
+      return encoder_output, {"act_loss": act_loss}
+    return encoder_output
+
+
+
+@registry.register_model
 class UniversalTransformerEncoder(transformer.Transformer):
   """Universal Transformer Encoder: Has no decoder (e.g.for classification)."""
 
@@ -347,6 +425,8 @@ class UniversalTransformerEncoder(transformer.Transformer):
 
       return encoder_output, {"act_loss": act_loss}
     return encoder_output
+
+
 
 
 def update_hparams_for_universal_transformer(hparams):
