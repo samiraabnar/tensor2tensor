@@ -1621,7 +1621,7 @@ def bottom_up_dot_product_attention(q,
 
     # we incorporate the presence of k (lower-layer nodes) after Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    logits = tf.multiply(assignment_weights, tf.tile(tf.expand_dims(
+    logits = tf.identity(assignment_weights * tf.tile(tf.expand_dims(
                   tf.transpose(presence_k, [0,2,1]), axis=1),
                       [1, number_of_heads, length_q, 1]),
                        name="attention_weights_scaled_with_k_presence_probs")
