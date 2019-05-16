@@ -36,8 +36,8 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 # pylint: disable=g-direct-tensorflow-import
-from google3.third_party.tensorflow.python.framework import function
-from google3.third_party.tensorflow.python.ops import inplace_ops
+from tensorflow.python.framework import function
+from tensorflow.python.ops import inplace_ops
 # pylint: enable=g-direct-tensorflow-import
 
 
