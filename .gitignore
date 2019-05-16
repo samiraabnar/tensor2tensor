@@ -23,6 +23,7 @@ dist/
 # Other
 *.DS_Store
 
+tmp
 logs
 data
 logs/*
