@@ -1674,9 +1674,9 @@ def bottom_up_dot_product_attention(q,
                  'tanh': 1.0}
 
     if pcal_mode == 'softmax':
-      new_q_presence = tf.nn.softmax(total_assigned_weight_per_q/pcal_temp, axis=-2, name="q_presence")
+      new_q_presence = tf.nn.softmax(total_assigned_weight_per_q/pcal_temp[pcal_mode], axis=-2, name="q_presence")
     else:
-      new_q_presence = pcal_fn[pcal_mode](total_assigned_weight_per_q/pcal_temp, name="q_presence")
+      new_q_presence = pcal_fn[pcal_mode](total_assigned_weight_per_q/pcal_temp[pcal_mode], name="q_presence")
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
