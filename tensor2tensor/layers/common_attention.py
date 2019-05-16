@@ -28,6 +28,7 @@ import numpy as np
 from six.moves import range  # pylint: disable=redefined-builtin
 from six.moves import zip  # pylint: disable=redefined-builtin
 
+from tensor2tensor.layers import area_attention
 from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import expert_utils
 
@@ -35,8 +36,8 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 # pylint: disable=g-direct-tensorflow-import
-from tensorflow.python.framework import function
-from tensorflow.python.ops import inplace_ops
+from google3.third_party.tensorflow.python.framework import function
+from google3.third_party.tensorflow.python.ops import inplace_ops
 # pylint: enable=g-direct-tensorflow-import
 
 
@@ -947,20 +948,21 @@ def attention_bias_ignore_padding(memory_padding):
 
 
 @expert_utils.add_name_scope()
-def attention_bias_to_padding(attention_bias):
+def attention_bias_to_padding(attention_bias, cast_fn=tf.to_float):
   """Inverse of attention_bias_ignore_padding().
 
   Args:
     attention_bias: a `Tensor` with shape [batch, 1, 1, memory_length], as
       returned by attention_bias_ignore_padding().
+    cast_fn: function used to cast to output type.
 
   Returns:
     a Tensor with shape [batch, memory_length] with 1.0 in padding positions
-    and 0.0 in non-padding positions.
+    and 0.0 in non-padding positions. Type is determined by cast_fn.
   """
   # `attention_bias` is a large negative number in padding positions and 0.0
   # elsewhere.
-  return tf.squeeze(tf.to_float(tf.less(attention_bias, -1)), axis=[1, 2])
+  return tf.squeeze(cast_fn(tf.less(attention_bias, -1)), axis=[1, 2])
 
 
 @expert_utils.add_name_scope()
@@ -1483,6 +1485,7 @@ def harden_attention_weights(weights, hard_attention_k):
   weights /= weights_sum
   return weights
 
+
 def dot_product_attention(q,
                           k,
                           v,
@@ -1497,6 +1500,7 @@ def dot_product_attention(q,
                           weight_dtype=None,
                           hard_attention_k=0):
   """Dot-product attention.
+
   Args:
     q: Tensor with shape [..., length_q, depth_k].
     k: Tensor with shape [..., length_kv, depth_k]. Leading dimensions must
@@ -1518,6 +1522,7 @@ def dot_product_attention(q,
       mixed precision.
     weight_dtype: The dtype weights are stored in when using mixed precision
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k)
+
   Returns:
     Tensor with shape [..., length_q, depth_v].
   """
@@ -1544,6 +1549,7 @@ def dot_product_attention(q,
     return tf.matmul(weights, v)
 
 
+
 def bottom_up_dot_product_attention(q,
                           k,
                           v,
@@ -1559,8 +1565,7 @@ def bottom_up_dot_product_attention(q,
                           activation_dtype=None,
                           weight_dtype=None):
   """Bottom-up dot-product attention.
-
-  Args:
+   Args:
     q: Tensor with shape [..., length_q, depth_k].
     k: Tensor with shape [..., length_kv, depth_k]. Leading dimensions must
       match with q.
@@ -1581,12 +1586,11 @@ def bottom_up_dot_product_attention(q,
       mixed precision.
     weight_dtype: The dtype weights are stored in when using mixed precision
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k)
-
-  Returns:
+   Returns:
     Tensor with shape [..., length_q, depth_v].
   """
   with tf.variable_scope(
-      name, default_name="bottom_up_dot_product_attention",
+    name, default_name="bottom_up_dot_product_attention",
           values=[q, k, v]) as scope:
     logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
@@ -1606,20 +1610,30 @@ def bottom_up_dot_product_attention(q,
       presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1))
 
     # [batch_size, heads, length_q, length_kv]
-    # we incorporate the presence of q before softmax
-    tf.logging.info("presence_q")
-    tf.logging.info(presence_q)
+    # we incorporate the presence of q (upper-layer nodes) before Softmax
+    # output of tile: [batch_size, num_heads, length_q, length_kv]
     logits *= tf.tile(tf.expand_dims(presence_q, axis=1),
                       [1, number_of_heads, 1, length_kv])
 
-    # softmax over q axis (instad of k, i.e. axis = -1)
-    weights = tf.nn.softmax(logits, axis=-2, name="attention_weights")
+    # Softmax over q axis (instead of k, i.e. axis = -1)
+    # TODO(dehghani): play with softmax temperature
+    weights = tf.nn.softmax(logits, axis=-2, name="assignment_weights")
 
-    # we incorporate the presence of k after softmax
+    # we incorporate the presence of k (lower-layer nodes) after Softmax
+    # output of tile: [batch_size, num_heads, length_q, length_kv]
     weights *= tf.tile(tf.expand_dims(
                   tf.transpose(presence_k, [0,2,1]), axis=1),
                       [1, number_of_heads, length_q, 1],
                        name="attention_weights_scaled_with_k_presence_probs")
+
+    # TODO(dehghani): check if softmax is better or not to renormalize things
+    # re-normalize the weights by applying Softmax over k axis
+    # [batch_size, num_heads, length_q, length_kv]
+    weights = tf.nn.softmax(weights, axis=-1, name="attention_weights")
+    # weights = tf.cond(weights, lambda: weights,
+    #                   lambda: (weights / tf.expand_dims(tf.reduce_sum(
+    #                     weights, axis=-1), axis=-1)))
+    # weights = tf.identity(weights, name="attention_weights")
 
     if save_weights_to is not None:
       save_weights_to[scope.name] = weights
@@ -1633,9 +1647,13 @@ def bottom_up_dot_product_attention(q,
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
     aggregate_weights_over_heads = tf.reduce_sum(weights, axis=1)
-    # [batch_size, length_q, length_kv] -> [batch_size, length_q, 1]
+    # [batch_size, length_q, length_kv] -> [batch_size, length_q]
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
-    new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
+
+    # TODO(dehghani): check if sigmoid makes more sense
+    # new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
+    new_q_presence = tf.nn.sigmoid(total_assigned_weight_per_q)
+
 
     return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
 
@@ -4085,6 +4103,12 @@ def multihead_attention(query_antecedent,
                         recurrent_memory=None,
                         chunk_number=None,
                         hard_attention_k=0,
+                        max_area_width=1,
+                        max_area_height=1,
+                        memory_height=1,
+                        area_key_mode="mean",
+                        area_value_mode="sum",
+                        training=True,
                         **kwargs):
   """Multihead scaled-dot-product attention with input/output transformations.
 
@@ -4143,6 +4167,14 @@ def multihead_attention(query_antecedent,
     chunk_number: an optional integer Tensor with shape [batch] used to operate
       the recurrent_memory.
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k).
+    max_area_width: the max width allowed for an area.
+    max_area_height: the max height allowed for an area.
+    memory_height: the height of the memory.
+    area_key_mode: the mode for computing area keys, which can be "mean",
+      "concat", "sum", "sample_concat", and "sample_sum".
+    area_value_mode: the mode for computing area values, which can be either
+      "mean", or "sum".
+    training: indicating if it is in the training mode.
     **kwargs (dict): Parameters for the attention function.
 
   Caching:
@@ -4267,14 +4299,25 @@ def multihead_attention(query_antecedent,
         x, additional_returned_value = x  # Unpack
         return_additional_returned_value = True
     elif attention_type == "dot_product":
-      x = dot_product_attention(
-          q, k, v, bias, dropout_rate, image_shapes,
-          save_weights_to=save_weights_to,
-          make_image_summary=make_image_summary,
-          dropout_broadcast_dims=dropout_broadcast_dims,
-          activation_dtype=kwargs.get("activation_dtype"),
-          hard_attention_k=hard_attention_k)
-
+      if max_area_width > 1 or max_area_height > 1:
+        x = area_attention.dot_product_area_attention(
+            q, k, v, bias, dropout_rate, image_shapes,
+            save_weights_to=save_weights_to,
+            dropout_broadcast_dims=dropout_broadcast_dims,
+            max_area_width=max_area_width,
+            max_area_height=max_area_height,
+            memory_height=memory_height,
+            area_key_mode=area_key_mode,
+            area_value_mode=area_value_mode,
+            training=training)
+      else:
+        x = dot_product_attention(q, k, v, bias, dropout_rate, image_shapes,
+                                  save_weights_to=save_weights_to,
+                                  make_image_summary=make_image_summary,
+                                  dropout_broadcast_dims=dropout_broadcast_dims,
+                                  activation_dtype=kwargs.get(
+                                      "activation_dtype"),
+                                  hard_attention_k=hard_attention_k)
     elif attention_type == "bottom_up_dot_product":
       return_additional_returned_value = True
       if presence_k is None and presence_q is not None:
@@ -4290,7 +4333,6 @@ def multihead_attention(query_antecedent,
           make_image_summary=make_image_summary,
           dropout_broadcast_dims=dropout_broadcast_dims,
           activation_dtype=kwargs.get("activation_dtype"))
-
     elif attention_type == "dot_product_relative":
       x = dot_product_attention_relative(
           q,
@@ -4362,10 +4404,7 @@ def multihead_attention(query_antecedent,
       assert attention_type == "unmasked_dilated_1d"
       x = dilated_self_attention_1d(q, k, v, block_length, block_width,
                                     gap_size, num_memory_blocks)
-
-
     x = combine_heads(x)
-
 
     # Set last dim specifically.
     x.set_shape(x.shape.as_list()[:-1] + [total_value_depth])
