@@ -1660,9 +1660,23 @@ def bottom_up_dot_product_attention(q,
     # [batch_size, length_q, length_kv] -> [batch_size, length_q]
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
 
-    # TODO(dehghani): check if sigmoid makes more sense
-    # new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
-    new_q_presence = tf.nn.sigmoid(total_assigned_weight_per_q, name="presence_q")
+
+
+    # TODO(Dehghani): what makes most sense?
+    pcal_mode = 'softmax' # | tanh | sigmoid
+
+    pcal_fn = {'softmax': tf.nn.softmax,
+               'sigmoid': tf.nn.sigmoid,
+               'tanh': tf.nn.tanh}
+
+    pcal_temp = {'softmax': 0.5,
+                 'sigmoid': 1,
+                 'tanh': 1.0}
+
+    if pcal_mode == 'softmax':
+      new_q_presence = tf.nn.softmax(total_assigned_weight_per_q/pcal_temp, axis=-2, name="q_presence")
+    else:
+      new_q_presence = pcal_fn[pcal_mode](total_assigned_weight_per_q/pcal_temp, name="q_presence")
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
