@@ -44,8 +44,8 @@ from tensor2tensor.utils import t2t_model
 import tensorflow as tf
 
 # pylint: disable=g-direct-tensorflow-import
-from google3.third_party.tensorflow.python.ops import inplace_ops
-from google3.third_party.tensorflow.python.util import nest
+from tensorflow.python.ops import inplace_ops
+from tensorflow.python.util import nest
 # pylint: enable=g-direct-tensorflow-import
 
 # Alias some commonly reused layers, here and elsewhere.
