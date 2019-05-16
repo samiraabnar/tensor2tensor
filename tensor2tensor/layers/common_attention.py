@@ -1656,7 +1656,7 @@ def bottom_up_dot_product_attention(q,
       save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
       save_weights_to[scope.name+'/weights'] = weights
       save_weights_to[scope.name+'/logits'] = logits
-      
+
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
     aggregate_weights_over_heads = tf.reduce_sum(weights, axis=1)
