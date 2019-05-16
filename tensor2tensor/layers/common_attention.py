@@ -1594,7 +1594,7 @@ def bottom_up_dot_product_attention(q,
           values=[q, k, v]) as scope:
     assignment_logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
-      assignment_logits = common_layers.cast_like(bias, assignment_logits)
+      bias = common_layers.cast_like(bias, assignment_logits)
       assignment_logits += bias
     # If logits are fp16, upcast before softmax
       assignment_logits = maybe_upcast(assignment_logits, activation_dtype, weight_dtype)
