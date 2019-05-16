@@ -1642,11 +1642,7 @@ def bottom_up_dot_product_attention(q,
                          logits, axis=-1), axis=-1)))
     weights = tf.identity(weights, name="attention_weights")
 
-    if save_weights_to is not None:
-      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
-      save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
-      save_weights_to[scope.name+'/weights'] = weights
-      save_weights_to[scope.name+'/logits'] = logits
+
 
     # Drop out attention links for each head.
     weights = common_layers.dropout_with_broadcast_dims(
@@ -1654,6 +1650,13 @@ def bottom_up_dot_product_attention(q,
     if common_layers.should_generate_summaries() and make_image_summary:
       attention_image_summary(weights, image_shapes)
 
+
+    if save_weights_to is not None:
+      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
+      save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
+      save_weights_to[scope.name+'/weights'] = weights
+      save_weights_to[scope.name+'/logits'] = logits
+      
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
     aggregate_weights_over_heads = tf.reduce_sum(weights, axis=1)
