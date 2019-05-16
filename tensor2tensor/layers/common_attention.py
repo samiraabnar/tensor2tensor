@@ -1652,7 +1652,7 @@ def bottom_up_dot_product_attention(q,
 
 
     if save_weights_to is not None:
-      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
+      save_weights_to[scope.name+'/assignment_probs'] = assignment_weights
       save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
       save_weights_to[scope.name+'/weights'] = weights
       save_weights_to[scope.name+'/logits'] = logits
