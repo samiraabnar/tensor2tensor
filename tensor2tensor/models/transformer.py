@@ -1259,6 +1259,10 @@ class TransformerEncoder(t2t_model.T2TModel):
 class BottomupTransformerEncoder(t2t_model.T2TModel):
   """Bottomup Transformer encoder only."""
 
+  def __init__(self, *args, **kwargs):
+    super(BottomupTransformerEncoder, self).__init__(*args, **kwargs)
+    self.attention_weights = {}  # For visualizing attention heads.
+
   def body(self, features):
     hparams = self._hparams
     inputs = features["inputs"]
@@ -1275,7 +1279,8 @@ class BottomupTransformerEncoder(t2t_model.T2TModel):
       encoder_input,
       encoder_self_attention_bias,
       hparams,
-      nonpadding=features_to_nonpadding(features, "inputs"))
+      nonpadding=features_to_nonpadding(features, "inputs"),
+      save_weights_to=self.attention_weights)
 
     tf.summary.histogram("encoder_output_presence", encoder_output_presence)
 

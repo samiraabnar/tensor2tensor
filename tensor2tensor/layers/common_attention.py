@@ -1592,14 +1592,14 @@ def bottom_up_dot_product_attention(q,
   with tf.variable_scope(
     name, default_name="bottom_up_dot_product_attention",
           values=[q, k, v]) as scope:
-    logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
+    assignment_logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
-      bias = common_layers.cast_like(bias, logits)
-      logits += bias
+      assignment_logits = common_layers.cast_like(bias, assignment_logits)
+      assignment_logits += bias
     # If logits are fp16, upcast before softmax
-    logits = maybe_upcast(logits, activation_dtype, weight_dtype)
+      assignment_logits = maybe_upcast(assignment_logits, activation_dtype, weight_dtype)
 
-    number_of_heads = common_layers.shape_list(logits)[1]
+    number_of_heads = common_layers.shape_list(assignment_logits)[1]
     length_q = common_layers.shape_list(q)[-2]
     length_kv = common_layers.shape_list(k)[-2]
 
@@ -1612,32 +1612,35 @@ def bottom_up_dot_product_attention(q,
     # [batch_size, heads, length_q, length_kv]
     # we incorporate the presence of q (upper-layer nodes) before Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    logits *= tf.tile(tf.expand_dims(presence_q, axis=1),
+    assignment_logits *= tf.tile(tf.expand_dims(presence_q, axis=1),
                       [1, number_of_heads, 1, length_kv])
 
     # Softmax over q axis (instead of k, i.e. axis = -1)
     # TODO(dehghani): play with softmax temperature
-    weights = tf.nn.softmax(logits, axis=-2, name="assignment_weights")
+    assignment_weights = tf.nn.softmax(assignment_logits, axis=-2, name="assignment_weights")
 
     # we incorporate the presence of k (lower-layer nodes) after Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    weights *= tf.tile(tf.expand_dims(
+    logits = tf.multiply(assignment_weights, tf.tile(tf.expand_dims(
                   tf.transpose(presence_k, [0,2,1]), axis=1),
-                      [1, number_of_heads, length_q, 1],
+                      [1, number_of_heads, length_q, 1]),
                        name="attention_weights_scaled_with_k_presence_probs")
 
     # TODO(dehghani): check if softmax is better or not to renormalize things
     # re-normalize the weights by applying Softmax over k axis
     # [batch_size, num_heads, length_q, length_kv]
-    weights = tf.nn.softmax(weights, axis=-1, name="attention_weights")
+    weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
     # weights = tf.cond(weights, lambda: weights,
     #                   lambda: (weights / tf.expand_dims(tf.reduce_sum(
     #                     weights, axis=-1), axis=-1)))
     # weights = tf.identity(weights, name="attention_weights")
 
     if save_weights_to is not None:
-      save_weights_to[scope.name] = weights
-      save_weights_to[scope.name + "/logits"] = logits
+      save_weights_to[assignment_weights.name] = assignment_weights
+      save_weights_to[assignment_weights.name + "/logits"] = assignment_logits
+      save_weights_to[weights.name] = weights
+      save_weights_to[weights.name + "/logits"] = logits
+
     # Drop out attention links for each head.
     weights = common_layers.dropout_with_broadcast_dims(
         weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
@@ -1652,8 +1655,11 @@ def bottom_up_dot_product_attention(q,
 
     # TODO(dehghani): check if sigmoid makes more sense
     # new_q_presence = tf.nn.softmax(total_assigned_weight_per_q, axis=-2)
-    new_q_presence = tf.nn.sigmoid(total_assigned_weight_per_q)
+    new_q_presence = tf.nn.sigmoid(total_assigned_weight_per_q, name="presence_q")
 
+    if save_weights_to is not None:
+      save_weights_to[new_q_presence.name] = new_q_presence
+      save_weights_to[new_q_presence.name+'/logits'] = total_assigned_weight_per_q
 
     return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
 
