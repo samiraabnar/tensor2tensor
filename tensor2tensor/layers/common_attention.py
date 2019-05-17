@@ -1689,7 +1689,7 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
       presence_logits_shape = tf.shape(presence_logits)
-      presence_logits = tf.reshape(presence_logits, [-1])
+      presence_logits = tf.reshape(presence_logits, [-1,1])
       presence_logits =  common_layers.dense(presence_logits, 1, use_bias=True, name=name)
       presence_logits =tf.reshape(presence_logits, presence_logits_shape)
 
