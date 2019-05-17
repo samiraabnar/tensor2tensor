@@ -1683,7 +1683,8 @@ def bottom_up_dot_product_attention(q,
                           'sigmoid': 1.0,
                           'tanh': 1.0}
 
-    presence_logits = total_assigned_weight_per_q
+    presence_logits = total_assigned_weight_per_q / \
+                      tf.expand_dims(tf.reduce_sum(total_assigned_weight_per_q,axis=-1), axis=-1)
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
       presence_logits_shape = tf.shape(presence_logits)
