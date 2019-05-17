@@ -1564,11 +1564,12 @@ def bottom_up_dot_product_attention(q,
                           dropout_broadcast_dims=None,
                           activation_dtype=None,
                           weight_dtype=None,
-                          assignment_softmax_temp=0.5,
+                          assignment_softmax_temp= 1.0,
                           transform_presence_logits=True,
-                          pcal_mode='softmax',
-                          scale=True # | tanh | sigmoid
-):
+                          presence_calc_mode='softmax', # | tanh | sigmoid
+                          presence_softmax_tem = 1.0,
+                          scale=True
+  ):
   """Bottom-up dot-product attention.
    Args:
     q: Tensor with shape [..., length_q, depth_k].
@@ -1676,31 +1677,30 @@ def bottom_up_dot_product_attention(q,
 
 
     # TODO(Dehghani): what makes most sense?
-    pcal_fn = {'softmax': tf.nn.softmax,
+    presence_calc_fn = {'softmax': tf.nn.softmax,
                'sigmoid': tf.nn.sigmoid,
                'tanh': tf.nn.tanh}
 
-    pcal_temp = {'softmax': 0.5,
-                 'sigmoid': 1,
-                 'tanh': 1.0}
+    presence_calc_temp = {'softmax': presence_softmax_tem,
+                          'sigmoid': 1.0,
+                          'tanh': 1.0}
 
     presence_logits = total_assigned_weight_per_q
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
       presence_logits =  common_layers.dense(presence_logits, tf.shape(presence_logits)[-1], use_bias=True, name=name)
 
-    if pcal_mode == 'softmax':
-      new_q_presence = tf.nn.softmax(presence_logits/pcal_temp[pcal_mode], axis=-2, name="q_presence")
+    if presence_calc_mode == 'softmax':
+      new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-2, name="q_presence")
     else:
-      new_q_presence = pcal_fn[pcal_mode](presence_logits/pcal_temp[pcal_mode], name="q_presence")
+      new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
       save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
 
     return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
-
-
+    
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
                                         cache=False):
