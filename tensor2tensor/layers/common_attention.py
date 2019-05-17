@@ -1563,7 +1563,12 @@ def bottom_up_dot_product_attention(q,
                           save_weights_to=None,
                           dropout_broadcast_dims=None,
                           activation_dtype=None,
-                          weight_dtype=None):
+                          weight_dtype=None,
+                          assignment_softmax_temp=0.5,
+                          transform_presence_logits=True,
+                          pcal_mode='softmax',
+                          scale=True # | tanh | sigmoid
+):
   """Bottom-up dot-product attention.
    Args:
     q: Tensor with shape [..., length_q, depth_k].
@@ -1592,7 +1597,11 @@ def bottom_up_dot_product_attention(q,
   with tf.variable_scope(
     name, default_name="bottom_up_dot_product_attention",
           values=[q, k, v]) as scope:
-    assignment_logits = tf.matmul(q, k, transpose_b=True)  # [..., length_q, length_kv]
+    scale_factor = 1
+    if scale:
+      scale_factor = tf.rsqrt(tf.to_float(common_layers.shape_list(q)[2]))
+
+    assignment_logits = tf.matmul(q * scale_factor, k, transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
       bias = common_layers.cast_like(bias, assignment_logits)
       assignment_logits += bias
@@ -1617,7 +1626,8 @@ def bottom_up_dot_product_attention(q,
 
     # Softmax over q axis (instead of k, i.e. axis = -1)
     # TODO(dehghani): play with softmax temperature
-    assignment_weights = tf.nn.softmax(assignment_logits, axis=-2, name="assignment_weights")
+
+    assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2, name="assignment_weights")
 
 
     # we incorporate the presence of k (lower-layer nodes) after Softmax
@@ -1666,8 +1676,6 @@ def bottom_up_dot_product_attention(q,
 
 
     # TODO(Dehghani): what makes most sense?
-    pcal_mode = 'softmax' # | tanh | sigmoid
-
     pcal_fn = {'softmax': tf.nn.softmax,
                'sigmoid': tf.nn.sigmoid,
                'tanh': tf.nn.tanh}
@@ -1676,14 +1684,19 @@ def bottom_up_dot_product_attention(q,
                  'sigmoid': 1,
                  'tanh': 1.0}
 
+    presence_logits = total_assigned_weight_per_q
+    # TODO(dehghani): We can also just learn one scaler value!
+    if transform_presence_logits:
+      presence_logits =  common_layers.dense(presence_logits, tf.shape(presence_logits)[-1], use_bias=True, name=name)
+
     if pcal_mode == 'softmax':
-      new_q_presence = tf.nn.softmax(total_assigned_weight_per_q/pcal_temp[pcal_mode], axis=-2, name="q_presence")
+      new_q_presence = tf.nn.softmax(presence_logits/pcal_temp[pcal_mode], axis=-2, name="q_presence")
     else:
-      new_q_presence = pcal_fn[pcal_mode](total_assigned_weight_per_q/pcal_temp[pcal_mode], name="q_presence")
+      new_q_presence = pcal_fn[pcal_mode](presence_logits/pcal_temp[pcal_mode], name="q_presence")
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
-      save_weights_to[scope.name+'/q_presence_logits'] = total_assigned_weight_per_q
+      save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
 
     return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
 
