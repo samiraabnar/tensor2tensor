@@ -1614,10 +1614,10 @@ def bottom_up_dot_product_attention(q,
     length_kv = common_layers.shape_list(k)[-2]
 
     if presence_q is None:  # [batch_size, length_q, 1]
-      presence_q = tf.ones(shape=(tf.shape(q)[0], length_q, 1)) / tf.to_float(tf.shape(q)[0])
+      presence_q = tf.ones(shape=(tf.shape(q)[0], length_q, 1)) / tf.to_float(length_q)
 
     if presence_k is None: # [batch_size, length_kv, 1]
-      presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1)) / tf.to_float(tf.shape(k)[0])
+      presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1)) / tf.to_float(length_q)
 
     # [batch_size, heads, length_q, length_kv]
     # we incorporate the presence of q (upper-layer nodes) before Softmax
