@@ -1687,7 +1687,7 @@ def bottom_up_dot_product_attention(q,
       presence_logits = tf.reshape(presence_logits, presence_logits_shape)
 
     if presence_calc_mode == 'softmax':
-      new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-2, name="q_presence")
+      new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-1, name="q_presence")
     else:
       new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
 
