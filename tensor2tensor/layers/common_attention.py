@@ -1622,7 +1622,7 @@ def bottom_up_dot_product_attention(q,
     # [batch_size, heads, length_q, length_kv]
     # we incorporate the presence of q (upper-layer nodes) before Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    similarities = assignment_logits
+    similarities = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2, name="assignment_weights")
     q_presence_mat = tf.tile(tf.expand_dims(presence_q, axis=1),
                       [1, number_of_heads, 1, length_kv])
     assignment_logits = similarities * q_presence_mat
@@ -1630,7 +1630,7 @@ def bottom_up_dot_product_attention(q,
     # Softmax over q axis (instead of k, i.e. axis = -1)
     # TODO(dehghani): play with softmax temperature
 
-    assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2, name="assignment_weights")
+    assignment_weights = assignment_logits # tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2, name="assignment_weights")
 
 
     # we incorporate the presence of k (lower-layer nodes) after Softmax
