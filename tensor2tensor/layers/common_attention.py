@@ -1567,7 +1567,7 @@ def bottom_up_dot_product_attention(q,
                           assignment_softmax_temp= 0.1,
                           transform_presence_logits=True,
                           presence_calc_mode='softmax', # | tanh | sigmoid
-                          presence_softmax_temp = 0.1,
+                          presence_softmax_temp = 0.01,
                           scale=True
   ):
   """Bottom-up dot-product attention.
@@ -1661,7 +1661,7 @@ def bottom_up_dot_product_attention(q,
 
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
-    aggregate_weights_over_heads = tf.reduce_sum(weights, axis=1)
+    aggregate_weights_over_heads = tf.reduce_sum(logits, axis=1)
     # [batch_size, length_q, length_kv] -> [batch_size, length_q]
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
 
