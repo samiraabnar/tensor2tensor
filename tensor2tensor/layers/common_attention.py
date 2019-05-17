@@ -1688,7 +1688,10 @@ def bottom_up_dot_product_attention(q,
     presence_logits = total_assigned_weight_per_q
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
-      presence_logits =  common_layers.dense(presence_logits, common_layers.shape_list(presence_logits)[-1], use_bias=True, name=name)
+      presence_logits_shape = tf.shape(presence_logits)
+      presence_logits = tf.reshape(presence_logits, [-1])
+      presence_logits =  common_layers.dense(presence_logits, 1, use_bias=True, name=name)
+      presence_logits =tf.reshape(presence_logits, presence_logits_shape)
 
     if presence_calc_mode == 'softmax':
       new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-2, name="q_presence")
