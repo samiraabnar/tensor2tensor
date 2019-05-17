@@ -1641,7 +1641,8 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): check if softmax is better or not to renormalize things
     # re-normalize the weights by applying Softmax over k axis
     # [batch_size, num_heads, length_q, length_kv]
-    weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
+    final_weights_temp=0.1
+    weights = tf.nn.softmax(logits/final_weights_temp, axis=-1, name="attention_weights")
 
 
     # Drop out attention links for each head.
