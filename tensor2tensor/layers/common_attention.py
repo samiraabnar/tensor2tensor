@@ -1565,10 +1565,10 @@ def bottom_up_dot_product_attention(q,
                           activation_dtype=None,
                           weight_dtype=None,
                           assignment_softmax_temp= 1.0,
-                          transform_presence_logits=True,
+                          transform_presence_logits=False,
                           presence_calc_mode='softmax', # | tanh | sigmoid
-                          presence_softmax_tem = 1.0,
-                          scale=True
+                          presence_softmax_temp = 1.0,
+                          scale=False
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1681,14 +1681,14 @@ def bottom_up_dot_product_attention(q,
                'sigmoid': tf.nn.sigmoid,
                'tanh': tf.nn.tanh}
 
-    presence_calc_temp = {'softmax': presence_softmax_tem,
+    presence_calc_temp = {'softmax': presence_softmax_temp,
                           'sigmoid': 1.0,
                           'tanh': 1.0}
 
     presence_logits = total_assigned_weight_per_q
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
-      presence_logits =  common_layers.dense(presence_logits, tf.shape(presence_logits)[-1], use_bias=True, name=name)
+      presence_logits =  common_layers.dense(presence_logits, common_layers.shape_list(presence_logits)[-1], use_bias=True, name=name)
 
     if presence_calc_mode == 'softmax':
       new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-2, name="q_presence")
