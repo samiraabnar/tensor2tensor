@@ -1623,9 +1623,9 @@ def bottom_up_dot_product_attention(q,
     # we incorporate the presence of q (upper-layer nodes) before Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     similarities = assignment_logits
-    presence_mat = tf.tile(tf.expand_dims(presence_q, axis=1),
+    q_presence_mat = tf.tile(tf.expand_dims(presence_q, axis=1),
                       [1, number_of_heads, 1, length_kv])
-    assignment_logits = similarities * presence_mat
+    assignment_logits = similarities * q_presence_mat
 
     # Softmax over q axis (instead of k, i.e. axis = -1)
     # TODO(dehghani): play with softmax temperature
@@ -1635,9 +1635,10 @@ def bottom_up_dot_product_attention(q,
 
     # we incorporate the presence of k (lower-layer nodes) after Softmax
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    logits = tf.identity(assignment_weights * tf.tile(tf.expand_dims(
+    k_presence_mat = tf.tile(tf.expand_dims(
                   tf.transpose(presence_k, [0,2,1]), axis=1),
-                      [1, number_of_heads, length_q, 1]),
+                      [1, number_of_heads, length_q, 1])
+    logits = tf.identity(assignment_weights * k_presence_mat,
                        name="attention_weights_scaled_with_k_presence_probs")
 
     # TODO(dehghani): check if softmax is better or not to renormalize things
@@ -1661,7 +1662,9 @@ def bottom_up_dot_product_attention(q,
       save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
       save_weights_to[scope.name+'/weights'] = weights
       save_weights_to[scope.name+'/logits'] = logits
-      save_weights_to[scope.name + '/presence_mat'] = presence_mat
+      save_weights_to[scope.name + '/q_presence_mat'] = q_presence_mat
+      save_weights_to[scope.name + '/k_presence_mat'] = k_presence_mat
+
 
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
