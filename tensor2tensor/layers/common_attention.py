@@ -1568,7 +1568,7 @@ def bottom_up_dot_product_attention(q,
                           transform_presence_logits=True,
                           presence_calc_mode='softmax', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
-                          scale=False
+                          scale=True
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1641,18 +1641,7 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): check if softmax is better or not to renormalize things
     # re-normalize the weights by applying Softmax over k axis
     # [batch_size, num_heads, length_q, length_kv]
-    # weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
-
-
-    # TODO(dehghani): check if softmax is better or not to renormalize things
-    # re-normalize the weights by applying Softmax over k axis
-    # [batch_size, num_heads, length_q, length_kv]
-    # weights = tf.nn.softmax(weights, axis=-1, name="attention_weights")
-    weights = tf.where(tf.equal(logits, 0), logits,
-                       (logits / tf.expand_dims(tf.reduce_sum(
-                         logits, axis=-1), axis=-1)))
-    weights = tf.identity(weights, name="attention_weights")
-
+    weights = tf.nn.softmax(logits, axis=-1, name="attention_weights")
 
 
     # Drop out attention links for each head.
@@ -1689,9 +1678,11 @@ def bottom_up_dot_product_attention(q,
     # TODO(dehghani): We can also just learn one scaler value!
     if transform_presence_logits:
       presence_logits_shape = tf.shape(presence_logits)
-      presence_logits = tf.reshape(presence_logits, [-1,1])
-      presence_logits =  common_layers.dense(presence_logits, 1, use_bias=True, name=name)
-      presence_logits =tf.reshape(presence_logits, presence_logits_shape)
+      # [batch_size, length_q] --> [batch_size * length_q, 1]
+      presence_logits = tf.reshape(presence_logits, [-1, 1])
+      presence_logits = common_layers.dense(presence_logits, 1, use_bias=True,
+                                            name=name)
+      presence_logits = tf.reshape(presence_logits, presence_logits_shape)
 
     if presence_calc_mode == 'softmax':
       new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-2, name="q_presence")
