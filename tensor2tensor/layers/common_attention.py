@@ -1568,7 +1568,7 @@ def bottom_up_dot_product_attention(q,
                           transform_presence_logits=False,
                           presence_calc_mode='softmax', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
-                          scale=False
+                          scale=True
   ):
   """Bottom-up dot-product attention.
    Args:
