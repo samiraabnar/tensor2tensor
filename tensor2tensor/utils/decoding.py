@@ -33,9 +33,9 @@ from six.moves import input  # pylint: disable=redefined-builtin
 from tensor2tensor.data_generators import problem as problem_lib
 from tensor2tensor.data_generators import text_encoder
 from tensor2tensor.data_generators import text_problems
+from tensor2tensor.utils import hparam
 from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import registry
-from tensor2tensor.utils.hparam import HParams
 import tensorflow as tf
 
 FLAGS = tf.flags.FLAGS
@@ -46,7 +46,7 @@ IMAGE_DECODE_LENGTH = 100
 
 def decode_hparams(overrides=""):
   """Hyperparameters for decoding."""
-  hp = HParams(
+  hp = hparam.HParams(
       save_images=False,
       log_results=True,
       extra_length=100,
@@ -65,7 +65,8 @@ def decode_hparams(overrides=""):
       identity_output=False,
       num_samples=-1,  # Number of examples to decode.
       delimiter="\n",
-      decode_to_file=None,  # str. Prefix for filename to write decodings to.
+      decode_to_file="",  # str. Prefix for filename to write decodings to.
+      decode_reference="",  # str. Filename to read references from.
       decode_in_memory=False,
       # How much decode should wait for the next checkpoint
       decode_timeout_mins=240,
@@ -256,9 +257,9 @@ def decode_once(estimator,
     estimator: tf.estimator.Estimator instance. Used to generate encoded
       predictions.
     problem_name: str. Name of problem.
-    hparams: tf.HParams instance. HParams for model training.
+    hparams: HParams instance. HParams for model training.
     infer_input_fn: zero-arg function. Input function for estimator.
-    decode_hp: tf.HParams instance. See decode_hparams() above.
+    decode_hp: HParams instance. See decode_hparams() above.
     decode_to_file: str. Prefix for filenames. Used to generated filenames to
       which decoded predictions are written.
     output_dir: str. Output directory. Only used for writing images.

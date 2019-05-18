@@ -29,6 +29,7 @@ import numpy as np
 
 from tensor2tensor.trax import inputs as inputs_lib
 from tensor2tensor.trax import models
+from tensor2tensor.trax import optimizers as trax_opt
 from tensor2tensor.trax import trax
 
 from tensorflow import test
@@ -47,6 +48,7 @@ def test_inputs(num_classes):
 
   return inputs_lib.Inputs(
       train_stream=input_stream,
+      train_eval_stream=input_stream,
       eval_stream=input_stream,
       input_shape=input_shape)
 
@@ -68,7 +70,7 @@ class TraxTest(test.TestCase):
       model = functools.partial(models.MLP,
                                 hidden_size=16,
                                 num_output_classes=num_classes)
-      inputs = lambda: test_inputs(num_classes)
+      inputs = lambda _: test_inputs(num_classes)
 
       # Train and evaluate
       state = trax.train(output_dir,
@@ -87,9 +89,40 @@ class TraxTest(test.TestCase):
       self.assertEqual(2, len(eval_acc))
 
       # Predict with final params
-      _, predict_fun = model()
-      inputs = inputs().train_stream()
-      predict_fun(state.params, next(inputs)[0])
+      inputs = inputs(1).train_stream()
+      model()(next(inputs)[0], state.params[0])
+
+  def test_train_eval_predict_sm3(self):
+    with self.tmp_dir() as output_dir:
+      # Prepare model and inputs
+      num_classes = 4
+      train_steps = 2
+      eval_steps = 2
+      model = functools.partial(models.MLP,
+                                hidden_size=16,
+                                num_output_classes=num_classes)
+      inputs = lambda _: test_inputs(num_classes)
+
+      # Train and evaluate
+      state = trax.train(output_dir,
+                         model=model,
+                         inputs=inputs,
+                         train_steps=train_steps,
+                         eval_steps=eval_steps,
+                         optimizer=trax_opt.SM3)
+
+      # Assert total train steps
+      self.assertEqual(train_steps, state.step)
+
+      # Assert 2 evaluations ran
+      train_acc = state.history.get("train", "metrics/accuracy")
+      eval_acc = state.history.get("eval", "metrics/accuracy")
+      self.assertEqual(len(train_acc), len(eval_acc))
+      self.assertEqual(2, len(eval_acc))
+
+      # Predict with final params
+      inputs = inputs(1).train_stream()
+      model()(next(inputs)[0], state.params[0])
 
 
 if __name__ == "__main__":

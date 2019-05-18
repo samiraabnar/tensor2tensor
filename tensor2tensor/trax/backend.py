@@ -27,15 +27,6 @@ import jax.numpy as jnp
 import jax.scipy.special as jax_special
 import numpy as onp
 
-import tensorflow as tf
-
-
-
-@gin.configurable()
-def backend(name="jax"):
-  if name == "numpy":
-    return _NUMPY_BACKEND
-  return _JAX_BACKEND
 
 
 _JAX_BACKEND = {
@@ -101,7 +92,21 @@ class RandomBackend(object):
 
 random = RandomBackend()
 
-# TODO(lukaszkaiser): make this lazy as random above so gin-config works.
-numpy = backend()["np"]
+
+# A class that just forwards attribute accesses to backend's numpy object.
+class NumpyBackend(object):
+
+  def __getattr__(self, attr):
+    return getattr(backend()["np"], attr)
 
 
+numpy = NumpyBackend()
+
+
+
+
+@gin.configurable()
+def backend(name="jax"):
+  if name == "numpy":
+    return _NUMPY_BACKEND
+  return _JAX_BACKEND

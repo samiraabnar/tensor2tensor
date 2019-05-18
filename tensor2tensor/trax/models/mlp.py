@@ -19,14 +19,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensor2tensor.trax.stax as stax
+from tensor2tensor.trax import layers as tl
 
 
 def MLP(num_hidden_layers=2,
         hidden_size=512,
-        activation_fn=stax.Relu,
-        num_output_classes=10):
-  layers = [stax.Flatten()]
-  layers += [stax.Dense(hidden_size), activation_fn] * num_hidden_layers
-  layers += [stax.Dense(num_output_classes), stax.LogSoftmax]
-  return stax.serial(*layers)
+        activation_fn=tl.Relu,
+        num_output_classes=10,
+        mode="train"):
+  """Multi-layer feed-forward neural network with non-linear activations."""
+  del mode
+  cur_layers = [tl.Flatten()]
+  for _ in range(num_hidden_layers):
+    cur_layers += [tl.Dense(hidden_size), activation_fn()]
+  cur_layers += [tl.Dense(num_output_classes), tl.LogSoftmax()]
+  return tl.Serial(*cur_layers)

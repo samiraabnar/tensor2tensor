@@ -153,7 +153,7 @@ def hard_tanh(x, saturation_limit=0.9):
 
 
 def inverse_exp_decay(max_step, min_value=0.01, step=None):
-  """Inverse-decay exponentially from 0.01 to 1.0 reached at max_step."""
+  """Inverse-decay exponentially from min_value to 1.0 reached at max_step."""
   inv_base = tf.exp(tf.log(min_value) / float(max_step))
   if step is None:
     step = tf.train.get_global_step()
@@ -164,7 +164,7 @@ def inverse_exp_decay(max_step, min_value=0.01, step=None):
 
 
 def inverse_lin_decay(max_step, min_value=0.01, step=None):
-  """Inverse-decay linearly from 0.01 to 1.0 reached at max_step."""
+  """Inverse-decay linearly from min_value to 1.0 reached at max_step."""
   if step is None:
     step = tf.train.get_global_step()
   if step is None:
@@ -172,6 +172,44 @@ def inverse_lin_decay(max_step, min_value=0.01, step=None):
   step = to_float(step)
   progress = tf.minimum(step / float(max_step), 1.0)
   return progress * (1.0 - min_value) + min_value
+
+
+def inverse_sigmoid_decay(max_step, min_value=0.01, step=None):
+  """Inverse-decay linearly from min_value to 1.0 reached at max_step."""
+  if step is None:
+    step = tf.train.get_global_step()
+  if step is None:
+    return 1.0
+  step = to_float(step)
+
+  def sigmoid(x):
+    return 1 / (1 + tf.exp(-x))
+
+  def inv_sigmoid(y):
+    return tf.log(y / (1 - y))
+
+  assert min_value > 0, (
+      "sigmoid's output is always >0 and <1. min_value must respect "
+      "these bounds for interpolation to work.")
+  assert min_value < 0.5, "Must choose min_value on the left half of sigmoid."
+
+  # Find
+  #   x  s.t. sigmoid(x ) = y_min and
+  #   x' s.t. sigmoid(x') = y_max
+  # We will map [0, max_step] to [x_min, x_max].
+  y_min = min_value
+  y_max = 1.0 - min_value
+  x_min = inv_sigmoid(y_min)
+  x_max = inv_sigmoid(y_max)
+
+  x = tf.minimum(step / float(max_step), 1.0)  # [0, 1]
+  x = x_min + (x_max - x_min) * x  # [x_min, x_max]
+  y = sigmoid(x)  # [y_min, y_max]
+
+  y = (y - y_min) / (y_max - y_min)  # [0, 1]
+  y = y * (1.0 - y_min)  # [0, 1-y_min]
+  y += y_min  # [y_min, 1]
+  return y
 
 
 def shakeshake2_py(x, y, equal=False, individual=False):
@@ -1213,6 +1251,21 @@ def length_from_embedding(emb):
   return tf.cast(tf.reduce_sum(mask_from_embedding(emb), [1, 2, 3]), tf.int32)
 
 
+def mask_pos_gt(source_length, target_length):
+  """A mask with 1.0 wherever source_pos > target_pos and 0.0 elsewhere.
+
+  Args:
+    source_length: an integer
+    target_length: an integer
+  Returns:
+    a Tensor with shape [1, target_length, source_length]
+  """
+  return tf.expand_dims(
+      tf.cast(tf.greater(tf.expand_dims(tf.range(target_length), axis=0),
+                         tf.expand_dims(tf.range(source_length), axis=1)),
+              dtype=tf.float32), axis=0)
+
+
 def mask_leq(target_length, source_length):
   """A mask with 1.0 wherever source_pos <= target_pos and 0.0 elsewhere.
 
@@ -1228,6 +1281,21 @@ def mask_leq(target_length, source_length):
       -1,
       0,
       out_shape=[1, target_length, source_length])
+
+
+def mask_pos_lt(source_length, target_length):
+  """A mask with 1.0 wherever source_pos < target_pos and 0.0 elsewhere.
+
+  Args:
+    source_length: an integer
+    target_length: an integer
+  Returns:
+    a Tensor with shape [1, target_length, source_length]
+  """
+  return tf.expand_dims(
+      tf.cast(tf.less(tf.expand_dims(tf.range(target_length), axis=0),
+                      tf.expand_dims(tf.range(source_length), axis=1)),
+              dtype=tf.float32), axis=0)
 
 
 def relu_density_logit(x, reduce_dims):
@@ -1846,8 +1914,8 @@ def padded_cross_entropy_mixture(logits,
   new_shape_for_xent = [num_mixtures] + shape_list(labels)
   labels = tf.tile(labels, [num_mixtures, 1, 1, 1])
 
-  xent, weights = padded_cross_entropy(
-      logits, labels, label_smoothing, weights_fn, reduce_sum, cutoff, gaussian)
+  xent, weights = padded_cross_entropy(logits, labels, label_smoothing,
+                                       weights_fn, reduce_sum, cutoff, gaussian)
 
   # reshape xent and weights to have the num_mixtures as first dimension
   xent = tf.reshape(xent, new_shape_for_xent)
@@ -1860,8 +1928,8 @@ def padded_cross_entropy_mixture(logits,
   if return_best_logits:
     best_mixture_indices = tf.cast(tf.argmin(xent, 0), dtype=tf.int32)
     individual_element_indices = tf.range(batch_size)
-    stacked_mixture_element_indices = tf.stack(
-        (tf.squeeze(best_mixture_indices), individual_element_indices), -1)
+    stacked_mixture_element_indices = tf.stack((tf.squeeze(
+        best_mixture_indices, axis=[1, 2]), individual_element_indices), -1)
     best_logits = tf.reshape(logits,
                              [num_mixtures, -1, timesteps, 1, 1, vocab_size])
     best_logits = tf.gather_nd(best_logits, stacked_mixture_element_indices)
@@ -1874,22 +1942,27 @@ def padded_cross_entropy_mixture(logits,
           message="Each batch element should have a probability value for each mixture element"
       )
   ]):
-    xent = tf.reduce_min(xent, axis=0)
+    xent_min = tf.reduce_min(xent, axis=0)
+    xent_max = tf.reduce_max(xent, axis=0)
     weights = tf.reduce_mean(weights, axis=0)
 
   with tf.control_dependencies([
       tf.assert_equal(
-          tf.shape(xent)[0], [batch_size],
+          tf.shape(xent_min)[0], [batch_size],
           message="There should be batch_size elements after selecting best mixture probabilities"
       )
   ]):
-    summed_xent = tf.reduce_sum(xent)
+    summed_xent_min = tf.reduce_sum(xent_min)
+    summed_xent_max = tf.reduce_sum(xent_max)
     summed_weights = tf.reduce_sum(weights)
 
+    tf.summary.scalar("mixture_xents_min", summed_xent_min / summed_weights)
+    tf.summary.scalar("mixture_xents_max", summed_xent_max / summed_weights)
+
   if return_best_logits:
-    return summed_xent, summed_weights, best_logits
+    return summed_xent_min, summed_weights, best_logits
   else:
-    return summed_xent, summed_weights
+    return summed_xent_min, summed_weights
 
 
 def _weights_one_third(labels):

@@ -13,15 +13,3 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Layers defined in trax."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-# We create a flat stax.* namespace for uniform calling conventions as we
-# upstream changes.
-# pylint: disable=wildcard-import
-from tensor2tensor.trax.stax.attention import *
-from tensor2tensor.trax.stax.losses import *
-from tensor2tensor.trax.stax.slax import *
-from tensor2tensor.trax.stax.stax_base import *

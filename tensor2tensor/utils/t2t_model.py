@@ -43,6 +43,7 @@ from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import optimize
 from tensor2tensor.utils import quantization
 from tensor2tensor.utils import registry
+from tensor2tensor.utils import scheduled_sampling
 
 import tensorflow as tf
 
@@ -308,7 +309,7 @@ class T2TModel(base.Layer):
     modality_name = self._hparams.name.get(
         "targets",
         modalities.get_name(modality))(self._hparams, vocab_size)
-    return modality_name.startswith("Real")
+    return modality_name.startswith("real")
 
   def call(self, inputs, **kwargs):
     del kwargs
@@ -707,14 +708,15 @@ class T2TModel(base.Layer):
           features["targets"],
           weights=features.get("targets_mask"))
 
-  def optimize(self, loss, num_async_replicas=1, use_tpu=False):
+  def optimize(self, loss, num_async_replicas=1, use_tpu=False, variables=None):
     """Return a training op minimizing loss."""
     lr = learning_rate.learning_rate_schedule(self.hparams)
     if num_async_replicas > 1:
       log_info("Dividing learning rate by num_async_replicas: %d",
                num_async_replicas)
     lr /= math.sqrt(float(num_async_replicas))
-    train_op = optimize.optimize(loss, lr, self.hparams, use_tpu=use_tpu)
+    train_op = optimize.optimize(
+        loss, lr, self.hparams, use_tpu=use_tpu, variables=variables)
     return train_op
 
   def set_mode(self, mode):
@@ -1784,10 +1786,11 @@ class T2TModel(base.Layer):
     This is the identity unless self.hparams.scheduled_sampling_prob > 0
     (default).
 
-    **WARNING**: This is not a faithful implementation of scheduled sampling.
-    This implementation samples tokens for timestep t condtioned on gold tokens
-    1...t-1. A proper implementation must condition on a mix of gold and
-    sampled tokens. Doing so is not efficient for models such like Transformer.
+    **WARNING**: If hparams.scheduled_sampling_method == "parallel", this is
+    not a faithful implementation of scheduled sampling. This implementation
+    samples tokens for timestep t condtioned on gold tokens 1...t-1. A proper
+    implementation must condition on a mix of gold and sampled tokens. Doing
+    so is not efficient for models such like Transformer.
 
     Args:
       features: {str: Tensor}. Features sharded along batch dimension.
@@ -1827,12 +1830,14 @@ class T2TModel(base.Layer):
     assert vocab_size is not None
     assert hparams.vocab_divisor == 1
 
+    # TODO(duckworthd): Move to scheduled_sampling.py.
     def sample(x):
       """Multinomial sampling from a n-dimensional tensor."""
       samples = tf.multinomial(tf.reshape(x, [-1, vocab_size]), 1)
       reshaped_samples = tf.reshape(samples, common_layers.shape_list(x)[:-1])
       return tf.to_int32(reshaped_samples)
 
+    # TODO(duckworthd): Move to scheduled_sampling.py.
     def mix_gold_sampled(gold_targets, sampled_targets, mixin_prob):
       """Interleave sampled and gold tokens randomly."""
       return tf.where(
@@ -1842,7 +1847,8 @@ class T2TModel(base.Layer):
           sampled_targets,
           gold_targets)
 
-    def sampled_results(mixin_prob):
+    # TODO(duckworthd): Move to scheduled_sampling.py.
+    def parallel_scheduled_sampling_pass(features, logits, mixin_prob):
       """Generate scheduled sampling results."""
       sampled_targets = sample(logits)
       new_targets = mix_gold_sampled(features["targets"],
@@ -1876,17 +1882,44 @@ class T2TModel(base.Layer):
       return new_logits, new_losses
 
     tf.logging.info("Using scheduled sampling.")
+    tf.logging.info("Warming scheduled sampling up with schedule: %s",
+                    hparams.scheduled_sampling_warmup_schedule)
     assert hparams.scheduled_sampling_prob == 1.0, (
         "hparams.scheduled_sampling_prob must be 0 or 1.")
-    # Gradually increase over a warmup period. Lower numbers mean more gold
-    # tokens.
-    mixin_prob = (
-        hparams.scheduled_sampling_gold_mixin_prob *
-        common_layers.inverse_exp_decay(
-            hparams.scheduled_sampling_warmup_steps,
-            min_value=0.001)
-    )
-    return sampled_results(mixin_prob)
+
+    if hparams.scheduled_sampling_method == "sequential":
+      tf.logging.info("Using SEQUENTIAL scheduled sampling.")
+      assert hparams.scheduled_sampling_num_passes == 1, (
+          "hparams.scheduled_sampling_num_passes must equal 1 if "
+          "doing sequential scheduled sampling.")
+      return scheduled_sampling.sequential_scheduled_sampling_for_t2tmodel(
+          self, features)
+    elif hparams.scheduled_sampling_method == "parallel":
+      tf.logging.info("Using PARALLEL scheduled sampling.")
+      # TODO(duckworthd): Move this block to scheduled_sampling.py.
+
+      # Gradually increase over a warmup period. Lower numbers mean more gold
+      # tokens.
+      mixin_prob = scheduled_sampling.inverse_decay_mix_prob(
+          hparams.scheduled_sampling_warmup_schedule,
+          hparams.scheduled_sampling_gold_mixin_prob,
+          hparams.scheduled_sampling_warmup_steps)
+
+      # Apply scheduled sampling over N passes. The logits from the (n-1)-th
+      # pass will be mixed with gold tokens for conditioning in the n-th pass.
+      assert hparams.scheduled_sampling_num_passes > 0, (
+          "hparams.scheduled_sampling_num_passes must be > 0 if "
+          "hparams.scheduled_sampling_prob > 0.0")
+      new_logits = logits
+      new_losses = losses
+      for _ in range(hparams.scheduled_sampling_num_passes):
+        new_logits, new_losses = parallel_scheduled_sampling_pass(
+            features, new_logits, mixin_prob)
+      return new_logits, new_losses
+    else:
+      raise ValueError(
+          "Unknown scheduled_sampling_method = %s" % (
+              hparams.scheduled_sampling_method,))
 
 
 def _with_timing(fn, msg, silent=False):
