@@ -1568,7 +1568,7 @@ def bottom_up_dot_product_attention(q,
                           transform_presence_logits=True,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 0.1,
-                          scale=False
+                          scale_factor=1.0
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1598,8 +1598,8 @@ def bottom_up_dot_product_attention(q,
   with tf.variable_scope(
     name, default_name="bottom_up_dot_product_attention",
           values=[q, k, v]) as scope:
-    scale_factor = 1
-    if scale:
+
+    if scale_factor is None:
       scale_factor = tf.rsqrt(tf.to_float(common_layers.shape_list(q)[2]))
 
     assignment_logits = tf.matmul(q * scale_factor, k, transpose_b=True)  # [..., length_q, length_kv]
@@ -1626,7 +1626,8 @@ def bottom_up_dot_product_attention(q,
       [1, number_of_heads, length_q, 1])
 
     # [batch_size, heads, length_q, length_kv]
-    # we incorporate the presence of q (upper-layer nodes) after Softmax
+    # we incorporate the presence of q (upper-layer nodes) after Softmax on q axis
+    # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
     assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
@@ -1634,13 +1635,12 @@ def bottom_up_dot_product_attention(q,
 
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-
     scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
-                       name="attention_weights_scaled_with_k_presence_probs")
+                       name="assignment_weights_scaled_with_k_presence_probs")
 
     # Drop out attention links for each head.
     scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
-      scaled_assignment_weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+      scaled_assignment_weights, keep_prob=1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
     if common_layers.should_generate_summaries() and make_image_summary:
       attention_image_summary(scaled_assignment_weights, image_shapes)
 
