@@ -1564,11 +1564,11 @@ def bottom_up_dot_product_attention(q,
                           dropout_broadcast_dims=None,
                           activation_dtype=None,
                           weight_dtype=None,
-                          assignment_softmax_temp= 0.1,
-                          transform_presence_logits=False,
-                          presence_calc_mode='softmax', # | tanh | sigmoid
+                          assignment_softmax_temp=1.0,
+                          transform_presence_logits=True,
+                          presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 0.1,
-                          scale=True
+                          scale=False
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1619,59 +1619,45 @@ def bottom_up_dot_product_attention(q,
     if presence_k is None: # [batch_size, length_kv, 1]
       presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1))
 
-    # [batch_size, heads, length_q, length_kv]
-    # we incorporate the presence of q (upper-layer nodes) before Softmax
-    # output of tile: [batch_size, num_heads, length_q, length_kv]
-    similarities = tf.nn.softmax(assignment_logits, axis=-2, name="assignment_weights")
     q_presence_mat = tf.tile(tf.expand_dims(presence_q, axis=1),
-                      [1, number_of_heads, 1, length_kv])
-    assignment_logits = similarities * q_presence_mat
-
-    # Softmax over q axis (instead of k, i.e. axis = -1)
-    # TODO(dehghani): play with softmax temperature
-
-    assignment_weights = assignment_logits # tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2, name="assignment_weights")
-
-
-    # we incorporate the presence of k (lower-layer nodes) after Softmax
-    # output of tile: [batch_size, num_heads, length_q, length_kv]
+                             [1, number_of_heads, 1, length_kv])
     k_presence_mat = tf.tile(tf.expand_dims(
-                  tf.transpose(presence_k, [0,2,1]), axis=1),
-                      [1, number_of_heads, length_q, 1])
-    logits = tf.identity(assignment_weights * k_presence_mat,
+      tf.transpose(presence_k, [0, 2, 1]), axis=1),
+      [1, number_of_heads, length_q, 1])
+
+    # [batch_size, heads, length_q, length_kv]
+    # we incorporate the presence of q (upper-layer nodes) after Softmax
+    # output of tile: [batch_size, num_heads, length_q, length_kv]
+    assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
+    assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
+
+
+    # we incorporate the presence of k (lower-layer nodes)
+    # output of tile: [batch_size, num_heads, length_q, length_kv]
+
+    scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
                        name="attention_weights_scaled_with_k_presence_probs")
 
-    # TODO(dehghani): check if softmax is better or not to renormalize things
-    # re-normalize the weights by applying Softmax over k axis
-    # [batch_size, num_heads, length_q, length_kv]
-    #final_weights_temp=0.1
-    weights = logits
-    #tf.nn.softmax(logits/final_weights_temp, axis=-1, name="attention_weights")
-
-
     # Drop out attention links for each head.
-    weights = common_layers.dropout_with_broadcast_dims(
-        weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+    scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
+      scaled_assignment_weights, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
     if common_layers.should_generate_summaries() and make_image_summary:
-      attention_image_summary(weights, image_shapes)
+      attention_image_summary(scaled_assignment_weights, image_shapes)
 
 
     if save_weights_to is not None:
-      save_weights_to[scope.name+'/similarities'] = similarities
-      save_weights_to[scope.name+'/assignment_probs'] = assignment_weights
-      save_weights_to[scope.name+'/assignment_logits'] = assignment_logits
-      save_weights_to[scope.name+'/weights'] = weights
-      save_weights_to[scope.name+'/logits'] = logits
+      save_weights_to[scope.name+'/similarities'] = assignment_logits
+      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
+      save_weights_to[scope.name+'/weights'] = scaled_assignment_weights
       save_weights_to[scope.name + '/q_presence_mat'] = q_presence_mat
       save_weights_to[scope.name + '/k_presence_mat'] = k_presence_mat
 
 
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
-    aggregate_weights_over_heads = tf.reduce_sum(logits, axis=1)
+    aggregate_weights_over_heads = tf.reduce_sum(scaled_assignment_weights, axis=1)
     # [batch_size, length_q, length_kv] -> [batch_size, length_q]
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
-
 
 
     # TODO(Dehghani): what makes most sense?
@@ -1685,7 +1671,7 @@ def bottom_up_dot_product_attention(q,
 
     presence_logits = total_assigned_weight_per_q / \
                       tf.expand_dims(tf.reduce_sum(total_assigned_weight_per_q,axis=-1), axis=-1)
-    # TODO(dehghani): We can also just learn one scaler value!
+
     if transform_presence_logits:
       presence_logits_shape = tf.shape(presence_logits)
       # [batch_size, length_q] --> [batch_size * length_q, 1]
@@ -1703,7 +1689,7 @@ def bottom_up_dot_product_attention(q,
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
       save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
 
-    return tf.matmul(weights, v), tf.expand_dims(new_q_presence, axis=-1)
+    return tf.matmul(scaled_assignment_weights, v), tf.expand_dims(new_q_presence, axis=-1)
     
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
