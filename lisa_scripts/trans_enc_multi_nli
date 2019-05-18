@@ -23,7 +23,7 @@ MODEL=transformer_encoder
 HPARAM=transformer_tiny
 PROBLEM=multi_nli
 
-tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
+$HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
 --problem=$PROBLEM  \
 --hparams='batch_size=128' \
 --worker_gpu=4 \
