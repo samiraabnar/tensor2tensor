@@ -29,4 +29,4 @@ $HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
 --worker_gpu=4 \
 --model=$MODEL \
 --hparams_set=$HPARAM \
---output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM_trial1
+--output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM'_trial1'
