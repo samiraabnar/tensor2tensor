@@ -25,7 +25,7 @@ PROBLEM=multi_nli
 
 $HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
 --problem=$PROBLEM  \
---hparams='batch_size=128' \
+--hparams='batch_size=256' \
 --worker_gpu=4 \
 --model=$MODEL \
 --hparams_set=$HPARAM \
