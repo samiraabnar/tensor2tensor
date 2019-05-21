@@ -620,8 +620,13 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   def hparams(self, defaults, unused_model_hparams):
     p = defaults
+    vocab_size = self.num_symbols + text_encoder.NUM_RESERVED_TOKENS
+
     p.modality = {"inputs": modalities.ModalityType.SYMBOL,
                   "targets": modalities.ModalityType.CLASS_LABEL}
-    p.vocab_size = {"inputs": self._encoders["inputs"].num_symbols,
+    p.vocab_size = {"inputs": vocab_size,
                     "targets": self.num_classes}
+
+    p.input_space_id = problem.SpaceID.DIGIT_0
+    p.target_space_id = problem.SpaceID.DIGIT_1
 
