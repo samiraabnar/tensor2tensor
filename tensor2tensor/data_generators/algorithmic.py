@@ -622,6 +622,6 @@ class AlgorithmicCount(AlgorithmicProblem):
     p = defaults
     p.modality = {"inputs": modalities.ModalityType.SYMBOL,
                   "targets": modalities.ModalityType.CLASS_LABEL}
-    p.vocab_size = {"inputs": self._encoders["inputs"].vocab_size,
+    p.vocab_size = {"inputs": self._encoders["inputs"].num_symbols,
                     "targets": self.num_classes}
 
