@@ -605,7 +605,7 @@ class AlgorithmicCount(AlgorithmicProblem):
                 i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
             ] + [text_encoder.EOS_ID]
           else:
-            new_case[feature] = case[feature]
+            new_case[feature] = [case[feature]]
         yield new_case
 
     utils.generate_dataset_and_shuffle(
