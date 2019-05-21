@@ -620,7 +620,6 @@ class AlgorithmicCount(AlgorithmicProblem):
         shuffle=False)
 
 
-
   def hparams(self, defaults, unused_model_hparams):
     p = defaults
     vocab_size = self.num_symbols + text_encoder.NUM_RESERVED_TOKENS
