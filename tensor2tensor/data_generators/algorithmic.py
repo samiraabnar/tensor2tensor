@@ -604,6 +604,8 @@ class AlgorithmicCount(AlgorithmicProblem):
             new_case[feature] = [
                 i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
             ] + [text_encoder.EOS_ID]
+          else:
+            new_case[feature] = case[feature]
         yield new_case
 
     utils.generate_dataset_and_shuffle(
@@ -614,13 +616,6 @@ class AlgorithmicCount(AlgorithmicProblem):
         shuffle=False)
 
 
-  def feature_encoders(self, data_dir):
-    encoder = self.get_or_create_vocab(data_dir, None, force_get=True)
-
-    return {
-        "inputs": encoder,
-        "targets": text_encoder.ClassLabelEncoder(self.class_labels(data_dir))
-    }
 
   def hparams(self, defaults, unused_model_hparams):
     p = defaults
