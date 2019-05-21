@@ -589,7 +589,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       inputs = list(np.random.randint(nbr_symbols, size=length))
 
       # Targets are simply the sorted inputs.
-      targets = np.int32(len(set(inputs)))
+      targets = int(len(set(inputs)))
 
       yield {"inputs": inputs, "targets": targets}
 
