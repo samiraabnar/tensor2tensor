@@ -585,11 +585,12 @@ class AlgorithmicCount(AlgorithmicProblem):
     for _ in range(nbr_cases):
       # Sample the sequence length.
       length = np.random.randint(max_length) + 1
+      targets = np.random.randint(length)
 
-      inputs = list(np.random.randint(nbr_symbols, size=length))
+      selected_symbols = np.random.choice(self.num_symbols, targets, replace=False)
 
-      # Targets are simply the sorted inputs.
-      targets = int(len(set(inputs)))
+      inputs_indexes = list(np.random.randint(targets, size=length))
+      inputs = selected_symbols[inputs_indexes]
 
       yield {"inputs": inputs, "targets": targets}
 
@@ -605,7 +606,7 @@ class AlgorithmicCount(AlgorithmicProblem):
                 i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
             ] + [text_encoder.EOS_ID]
           else:
-            new_case[feature] = [case[feature]]
+            new_case[feature] = case[feature]
         yield new_case
 
     utils.generate_dataset_and_shuffle(
