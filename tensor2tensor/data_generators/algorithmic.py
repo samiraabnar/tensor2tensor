@@ -586,16 +586,14 @@ class AlgorithmicCount(AlgorithmicProblem):
       # Sample the sequence length.
       length = np.random.randint(max_length) + 1
       targets = int(np.random.randint(length) + 1)
+      selected_symbols = np.random.choice(num_sumbols, size=targets, replace=False)
 
-      selected_symbols = np.random.choice(self.num_symbols, targets, replace=False)
-
-
-      inputs = selected_symbols
+      inputs = list(selected_symbols)
       if length - targets > 0:
-        extra_inputs_indexes = list(np.random.randint(targets, size=length-targets))
-        inputs = selected_symbols + selected_symbols[extra_inputs_indexes]
+        extra_inputs_indexes = list(np.random.randint(targets, size=length - targets))
+        inputs = inputs + list(selected_symbols[extra_inputs_indexes])
 
-      inputs = list(map(int,inputs))
+      np.random.shuffle(inputs)
 
       yield {"inputs": inputs, "targets": [targets]}
 
