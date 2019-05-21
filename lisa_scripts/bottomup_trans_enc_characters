@@ -1,0 +1,32 @@
+#!/bin/bash
+
+#SBATCH --job-name=reversed_attention_multi_nli
+#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=5:00:00
+#SBATCH --partition=gpu
+
+module load eb
+module load Python/3.6.3-foss-2017b
+module load CUDA/10.0.130
+module load cuDNN/7.3.1-CUDA-10.0.130
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:/hpc/eb/Debian/cuDNN/7.3.1-CUDA-10.0.130/lib64:$LD_LIBRARY_PATH
+
+cd /home/samigpu/Codes/tensor2tensor
+
+conda activate myt2t
+HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
+
+DATA_DIR=$HEAD_DIR/data/multi_nli_characters/
+LOGS_DIR=$HEAD_DIR/logs
+MODEL=bottomup_transformer_encoder
+HPARAM=transformer_tiny_tall
+PROBLEM=multi_nli_characters
+
+$HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
+--problem=$PROBLEM  \
+--hparams='batch_size=256' \
+--worker_gpu=4 \
+--model=$MODEL \
+--hparams_set=$HPARAM \
+--output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM'_trial2'
