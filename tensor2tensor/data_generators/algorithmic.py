@@ -590,7 +590,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       selected_symbols = np.random.choice(self.num_symbols, targets, replace=False)
 
       inputs_indexes = list(np.random.randint(targets, size=length))
-      inputs = selected_symbols[inputs_indexes]
+      inputs = list(map(int,selected_symbols[inputs_indexes]))
 
       yield {"inputs": inputs, "targets": targets}
 
