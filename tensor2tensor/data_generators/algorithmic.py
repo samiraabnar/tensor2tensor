@@ -593,6 +593,14 @@ class AlgorithmicCount(AlgorithmicProblem):
 
       yield {"inputs": inputs, "targets": targets}
 
+  def feature_encoders(self, data_dir):
+    encoder = self.get_or_create_vocab(data_dir, None, force_get=True)
+
+    return {
+        "inputs": encoder,
+        "targets": text_encoder.ClassLabelEncoder(self.class_labels(data_dir))
+    }
+  
   def hparams(self, defaults, unused_model_hparams):
     p = defaults
     p.modality = {"inputs": modalities.ModalityType.SYMBOL,
