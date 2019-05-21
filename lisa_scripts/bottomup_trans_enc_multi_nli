@@ -20,7 +20,7 @@ HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 DATA_DIR=$HEAD_DIR/data/multi_nli/
 LOGS_DIR=$HEAD_DIR/logs
 MODEL=bottomup_transformer_encoder
-HPARAM=transformer_tall
+HPARAM=transformer_tiny_tall
 PROBLEM=multi_nli
 
 $HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \

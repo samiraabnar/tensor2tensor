@@ -2124,7 +2124,7 @@ def transformer_small():
   return hparams
 
 @registry.register_hparams
-def transformer_tall():
+def transformer_tiny_tall():
   hparams = transformer_base()
   hparams.num_hidden_layers = 6
   hparams.hidden_size = 128

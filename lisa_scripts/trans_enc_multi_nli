@@ -20,7 +20,7 @@ HEAD_DIR=/home/samigpu/Codes/tensor2tensor/
 DATA_DIR=$HEAD_DIR/data/multi_nli/
 LOGS_DIR=$HEAD_DIR/logs
 MODEL=transformer_encoder
-HPARAM=transformer_tiny
+HPARAM=transformer_tall
 PROBLEM=multi_nli
 
 $HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
@@ -29,4 +29,4 @@ $HEAD_DIR/tensor2tensor/bin/t2t-trainer   --data_dir=$DATA_DIR   \
 --worker_gpu=4 \
 --model=$MODEL \
 --hparams_set=$HPARAM \
---output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM'_trial1'
+--output_dir=$LOGS_DIR/$PROBLEM/$MODEL'_'$HPARAM'_trial2'
