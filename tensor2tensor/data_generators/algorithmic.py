@@ -593,6 +593,27 @@ class AlgorithmicCount(AlgorithmicProblem):
 
       yield {"inputs": inputs, "targets": targets}
 
+  def generate_data(self, data_dir, _, task_id=-1):
+
+    def generator_eos(nbr_symbols, max_length, nbr_cases):
+      """Shift by NUM_RESERVED_IDS and append EOS token."""
+      for case in self.generator(nbr_symbols, max_length, nbr_cases):
+        new_case = {}
+        for feature in case:
+          if feature == "inputs":
+            new_case[feature] = [
+                i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
+            ] + [text_encoder.EOS_ID]
+        yield new_case
+
+    utils.generate_dataset_and_shuffle(
+        generator_eos(self.num_symbols, self.train_length, self.train_size),
+        self.training_filepaths(data_dir, self.num_shards, shuffled=True),
+        generator_eos(self.num_symbols, self.dev_length, self.dev_size),
+        self.dev_filepaths(data_dir, 1, shuffled=True),
+        shuffle=False)
+
+
   def feature_encoders(self, data_dir):
     encoder = self.get_or_create_vocab(data_dir, None, force_get=True)
 
@@ -600,7 +621,7 @@ class AlgorithmicCount(AlgorithmicProblem):
         "inputs": encoder,
         "targets": text_encoder.ClassLabelEncoder(self.class_labels(data_dir))
     }
-  
+
   def hparams(self, defaults, unused_model_hparams):
     p = defaults
     p.modality = {"inputs": modalities.ModalityType.SYMBOL,
