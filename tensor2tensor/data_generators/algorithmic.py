@@ -592,7 +592,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       inputs_indexes = list(np.random.randint(targets, size=length))
       inputs = list(map(int,selected_symbols[inputs_indexes]))
 
-      yield {"inputs": inputs, "targets": targets}
+      yield {"inputs": inputs, "targets": [targets]}
 
   def generate_data(self, data_dir, _, task_id=-1):
 
