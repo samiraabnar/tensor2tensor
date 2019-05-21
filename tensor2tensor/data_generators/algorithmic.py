@@ -595,6 +595,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
       np.random.shuffle(inputs)
 
+      inputs = list(map(int,inputs))
       yield {"inputs": inputs, "targets": [targets]}
 
   def generate_data(self, data_dir, _, task_id=-1):
