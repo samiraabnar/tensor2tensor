@@ -515,7 +515,6 @@ class AlgorithmicSortProblem(AlgorithmicProblem):
     defaults = super(AlgorithmicSortProblem, self).eval_metrics()
     return defaults + [metrics.Metrics.EDIT_DISTANCE]
 
-
 @registry.register_problem
 class TinyAlgo(AlgorithmicIdentityBinary40):
   """A small algorthmic problem for testing."""
@@ -543,3 +542,61 @@ class TinyAlgo(AlgorithmicIdentityBinary40):
 
     # Generate a small test dataset
     cls().generate_data(TinyAlgo.data_dir, None)
+
+
+@registry.register_problem
+class AlgorithmicCount(AlgorithmicProblem):
+  """Problem spec for sorting numbers."""
+
+  @property
+  def num_symbols(self):
+    return max(self.train_length, self.dev_length)
+
+
+  @property
+  def num_classes(self):
+    return self.num_symbols
+
+  @property
+  def train_length(self):
+    return 40
+
+  @property
+  def dev_length(self):
+    return self.train_length * 10
+
+
+  def generator(self, nbr_symbols, max_length, nbr_cases):
+    """Generating for counting number of unique symbols in a sequence.
+
+    The length of the sequence is drawn uniformly at random from [1, max_length]
+    and then symbols are drawn uniformly at
+    random from [0, nbr_symbols) until nbr_cases sequences have been produced.
+
+    Args:
+      nbr_symbols: number of symbols to use in each sequence.
+      max_length: integer, maximum length of sequences to generate.
+      nbr_cases: the number of cases to generate.
+
+    Yields:
+      A dictionary {"inputs": input-list, "targets": target-list} where
+      target-list is input-list sorted.
+    """
+    for _ in range(nbr_cases):
+      # Sample the sequence length.
+      length = np.random.randint(max_length) + 1
+
+      inputs = list(np.random.randint(nbr_symbols, size=length))
+
+      # Targets are simply the sorted inputs.
+      targets = len(set(inputs))
+
+      yield {"inputs": inputs, "targets": targets}
+
+  def hparams(self, defaults, unused_model_hparams):
+    p = defaults
+    p.modality = {"inputs": modalities.ModalityType.SYMBOL,
+                  "targets": modalities.ModalityType.CLASS_LABEL}
+    p.vocab_size = {"inputs": self._encoders["inputs"].vocab_size,
+                    "targets": self.num_classes}
+
