@@ -585,7 +585,7 @@ class AlgorithmicCount(AlgorithmicProblem):
     for _ in range(nbr_cases):
       # Sample the sequence length.
       length = np.random.randint(max_length) + 1
-      targets = np.random.randint(length)
+      targets = int(np.random.randint(length))
 
       selected_symbols = np.random.choice(self.num_symbols, targets, replace=False)
 
