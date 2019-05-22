@@ -633,3 +633,14 @@ class AlgorithmicCount(AlgorithmicProblem):
     p.input_space_id = problem.SpaceID.DIGIT_0
     p.target_space_id = problem.SpaceID.DIGIT_1
 
+
+@registry.register_problem
+class AlgorithmicCount10(AlgorithmicCount):
+  """Problem spec for sorting numbers."""
+
+  @property
+  def num_symbols(self):
+    return 10
+
+
+
