@@ -563,7 +563,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def dev_length(self):
-    return self.train_length * 10
+    return self.train_length * 2
 
 
   def generator(self, nbr_symbols, max_length, nbr_cases):
@@ -641,6 +641,19 @@ class AlgorithmicCount10(AlgorithmicCount):
   @property
   def num_symbols(self):
     return 10
+
+  @property
+  def num_classes(self):
+    return self.num_symbols
+
+  @property
+  def train_length(self):
+    return 40
+
+  @property
+  def dev_length(self):
+    return self.train_length * 2
+  
 
 
 
