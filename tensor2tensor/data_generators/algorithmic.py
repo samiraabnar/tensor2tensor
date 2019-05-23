@@ -563,7 +563,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def dev_length(self):
-    return self.train_length * 2
+    return self.train_length
 
 
   def generator(self, nbr_symbols, max_length, nbr_cases):
@@ -633,6 +633,16 @@ class AlgorithmicCount(AlgorithmicProblem):
     p.input_space_id = problem.SpaceID.DIGIT_0
     p.target_space_id = problem.SpaceID.DIGIT_1
 
+  def example_reading_spec(self):
+    data_fields = {"inputs": tf.VarLenFeature(tf.int64), "targets": tf.FixedLenFeature([1], tf.int64), }
+    data_items_to_decoders = None
+
+    return (data_fields, data_items_to_decoders)
+
+  def feature_encoders(self, data_dir):
+    encoder = self.get_or_create_vocab(data_dir, None, force_get=True)
+    return {"inputs": encoder, "targets": text_encoder.ClassLabelEncoder(self.class_labels(data_dir))}
+
 
 @registry.register_problem
 class AlgorithmicCount10(AlgorithmicCount):
@@ -652,7 +662,7 @@ class AlgorithmicCount10(AlgorithmicCount):
 
   @property
   def dev_length(self):
-    return self.train_length * 2
+    return self.train_length
   
 
 
