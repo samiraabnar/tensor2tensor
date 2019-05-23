@@ -644,7 +644,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   def feature_encoders(self, data_dir):
     encoder = text_encoder.TextEncoder()
-    return {"inputs": encoder, "targets": text_encoder.ClassLabelEncoder(self.class_labels(data_dir))}
+    return {"inputs": encoder, "targets": text_encoder.ClassLabelEncoder(np.arange(1, self.num_classes+1))}
 
 
 @registry.register_problem
