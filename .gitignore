@@ -33,3 +33,6 @@ output/*
 *.gz
 *.zip
 *.tgz
+
+.idea
+.idea/*

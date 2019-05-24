@@ -22,7 +22,7 @@ import os
 import shutil
 import numpy as np
 from six.moves import range  # pylint: disable=redefined-builtin
-from tensor2tensor.data_generators import generator_utils as utils
+from tensor2tensor.data_generators import generator_utils as utils, text_problems
 from tensor2tensor.data_generators import problem
 from tensor2tensor.data_generators import text_encoder
 from tensor2tensor.layers import modalities
@@ -563,8 +563,11 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def dev_length(self):
-    return self.train_length * 2
+    return self.train_length
 
+  @property
+  def vocab_type(self):
+    return text_problems.VocabType.CHARACTER
 
   def generator(self, nbr_symbols, max_length, nbr_cases):
     """Generating for counting number of unique symbols in a sequence.
@@ -633,6 +636,17 @@ class AlgorithmicCount(AlgorithmicProblem):
     p.input_space_id = problem.SpaceID.DIGIT_0
     p.target_space_id = problem.SpaceID.DIGIT_1
 
+  def example_reading_spec(self):
+    data_fields = {"inputs": tf.VarLenFeature(tf.int64), "targets": tf.FixedLenFeature([1], tf.int64), }
+    data_items_to_decoders = None
+
+    return (data_fields, data_items_to_decoders)
+
+  def feature_encoders(self, data_dir):
+    encoder = text_encoder.TextEncoder()
+    return {"inputs": encoder,
+            "targets": text_encoder.ClassLabelEncoder(["ID_%d" % i for i in range(self.num_classes)])}
+
 
 @registry.register_problem
 class AlgorithmicCount10(AlgorithmicCount):
@@ -652,7 +666,7 @@ class AlgorithmicCount10(AlgorithmicCount):
 
   @property
   def dev_length(self):
-    return self.train_length * 2
+    return self.train_length
 
 
 @registry.register_problem
@@ -673,9 +687,8 @@ class AlgorithmicCount2(AlgorithmicCount):
 
   @property
   def dev_length(self):
-    return self.train_length * 2
-
-
+    return self.train_length
+  
 
 
 
