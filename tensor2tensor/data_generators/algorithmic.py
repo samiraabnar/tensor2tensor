@@ -668,7 +668,7 @@ class AlgorithmicCount10(AlgorithmicCount):
 
   @property
   def dev_length(self):
-    return self.train_length
+    return self.train_length * 2
 
 
 @registry.register_problem
@@ -689,7 +689,7 @@ class AlgorithmicCount2(AlgorithmicCount):
 
   @property
   def dev_length(self):
-    return self.train_length
+    return self.train_length * 2
   
 
 
