@@ -653,7 +653,29 @@ class AlgorithmicCount10(AlgorithmicCount):
   @property
   def dev_length(self):
     return self.train_length * 2
-  
+
+
+@registry.register_problem
+class AlgorithmicCount2(AlgorithmicCount):
+  """Problem spec for sorting numbers."""
+
+  @property
+  def num_symbols(self):
+    return 2
+
+  @property
+  def num_classes(self):
+    return self.num_symbols
+
+  @property
+  def train_length(self):
+    return 40
+
+  @property
+  def dev_length(self):
+    return self.train_length * 2
+
+
 
 
 
