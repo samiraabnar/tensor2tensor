@@ -612,6 +612,8 @@ class AlgorithmicCount(AlgorithmicProblem):
             new_case[feature] = [
                 i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
             ] + [text_encoder.EOS_ID]
+          elif feature == "targets":
+            new_case[feature] = [i-1 for i in case[feature]]
           else:
             new_case[feature] = case[feature]
         yield new_case
