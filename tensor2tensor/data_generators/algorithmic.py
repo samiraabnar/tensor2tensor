@@ -563,11 +563,11 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def dev_length(self):
-    return self.train_length
+    return self.train_length * 10
 
-  @property
-  def vocab_type(self):
-    return text_problems.VocabType.CHARACTER
+#  @property
+#  def vocab_type(self):
+#    return text_problems.VocabType.CHARACTER
 
   def generator(self, nbr_symbols, max_length, nbr_cases):
     """Generating for counting number of unique symbols in a sequence.
@@ -658,38 +658,14 @@ class AlgorithmicCount10(AlgorithmicCount):
   def num_symbols(self):
     return 10
 
-  @property
-  def num_classes(self):
-    return self.num_symbols
-
-  @property
-  def train_length(self):
-    return 40
-
-  @property
-  def dev_length(self):
-    return self.train_length * 2
-
 
 @registry.register_problem
-class AlgorithmicCount2(AlgorithmicCount):
+class AlgorithmicCount100(AlgorithmicCount):
   """Problem spec for sorting numbers."""
 
   @property
   def num_symbols(self):
-    return 2
-
-  @property
-  def num_classes(self):
-    return self.num_symbols
-
-  @property
-  def train_length(self):
-    return 40
-
-  @property
-  def dev_length(self):
-    return self.train_length * 2
+    return 100
   
 
 
