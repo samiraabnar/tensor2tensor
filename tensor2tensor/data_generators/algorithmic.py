@@ -563,7 +563,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def dev_length(self):
-    return self.train_length * 10
+    return self.train_length
 
 #  @property
 #  def vocab_type(self):
