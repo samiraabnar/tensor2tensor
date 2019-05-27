@@ -1696,6 +1696,9 @@ def bottom_up_dot_product_attention(q,
     else:
       new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
 
+    new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
+    new_q_presence = new_q_presence * presence_q
+
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
       save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
@@ -1703,11 +1706,9 @@ def bottom_up_dot_product_attention(q,
     # scaled_assignment_weights: [batch_size, num_heads, length_q, length_kv]
     # v: [batch_size, num_heads, length_k, embedding_dim]
     # dotproduct: [length_q, embedding]
-
-
     values = tf.matmul(scaled_assignment_weights, v)
 
-    return values, tf.expand_dims(new_q_presence * presence_q, axis=-1)
+    return values, new_q_presence
     
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
