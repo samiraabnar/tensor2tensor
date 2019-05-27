@@ -1569,7 +1569,8 @@ def bottom_up_dot_product_attention(q,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
                           scale_factor=1.0,
-                          include_presence_in_weights=False
+                          include_presence_q_in_weights=False,
+                          include_presence_k_in_weights=True
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1632,7 +1633,7 @@ def bottom_up_dot_product_attention(q,
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
 
-    if include_presence_in_weights:
+    if include_presence_q_in_weights:
       assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
     else:
       assignment_weights = tf.identity(assignment_weights, name="assignment_weights")
@@ -1640,8 +1641,12 @@ def bottom_up_dot_product_attention(q,
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
 
-    scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
+    if include_presence_k_in_weights:
+      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
                          name="assignment_weights_scaled_with_k_presence_probs")
+    else:
+      scaled_assignment_weights = tf.identity(assignment_weights,
+                                              name="assignment_weights_scaled_with_k_presence_probs")
 
 
     # Drop out attention links for each head.
@@ -1700,11 +1705,8 @@ def bottom_up_dot_product_attention(q,
     # dotproduct: [length_q, embedding]
 
 
-    if include_presence_in_weights:
-      values = tf.matmul(scaled_assignment_weights, v)
-    else:
-      values = tf.matmul(assignment_weights, v)
-      
+    values = tf.matmul(scaled_assignment_weights, v)
+
     return values, tf.expand_dims(new_q_presence, axis=-1)
     
 def _generate_relative_positions_matrix(length_q, length_k,
