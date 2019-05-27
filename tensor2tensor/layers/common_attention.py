@@ -1568,7 +1568,8 @@ def bottom_up_dot_product_attention(q,
                           transform_presence_logits=True,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
-                          scale_factor=1.0
+                          scale_factor=1.0,
+                          include_presence_in_weights=False
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1630,13 +1631,21 @@ def bottom_up_dot_product_attention(q,
     # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
-    assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
 
+    if include_presence_in_weights:
+      assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
+    else:
+      assignment_weights = tf.identity(assignment_weights, name="assignment_weights")
 
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
-                       name="assignment_weights_scaled_with_k_presence_probs")
+
+    if include_presence_in_weights:
+      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
+                         name="assignment_weights_scaled_with_k_presence_probs")
+    else:
+      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
+                                              name="assignment_weights_scaled_with_k_presence_probs")
 
     # Drop out attention links for each head.
     scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
