@@ -2125,11 +2125,8 @@ def transformer_small():
 
 @registry.register_hparams
 def transformer_tiny_tall():
-  hparams = transformer_base()
-  hparams.num_hidden_layers = 6
-  hparams.hidden_size = 128
-  hparams.filter_size = 512
-  hparams.num_heads = 4
+  hparams = transformer_tiny()
+  hparams.num_hidden_layers = 4
   return hparams
 
 @registry.register_hparams
