@@ -1571,7 +1571,7 @@ def bottom_up_dot_product_attention(q,
                           scale_factor=1.0,
                           include_presence_q_in_weights=False,
                           include_presence_k_in_weights=True,
-                          propagate_presence=True
+                          propagate_presence=False
   ):
   """Bottom-up dot-product attention.
    Args:
