@@ -1640,12 +1640,9 @@ def bottom_up_dot_product_attention(q,
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
 
-    if include_presence_in_weights:
-      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
+    scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
                          name="assignment_weights_scaled_with_k_presence_probs")
-    else:
-      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
-                                              name="assignment_weights_scaled_with_k_presence_probs")
+
 
     # Drop out attention links for each head.
     scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
@@ -1702,7 +1699,13 @@ def bottom_up_dot_product_attention(q,
     # v: [batch_size, num_heads, length_k, embedding_dim]
     # dotproduct: [length_q, embedding]
 
-    return tf.matmul(scaled_assignment_weights, v), tf.expand_dims(new_q_presence, axis=-1)
+
+    if include_presence_in_weights:
+      values = tf.matmul(scaled_assignment_weights, v)
+    else:
+      values = tf.matmul(assignment_weights, v)
+      
+    return values, tf.expand_dims(new_q_presence, axis=-1)
     
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
