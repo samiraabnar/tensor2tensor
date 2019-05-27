@@ -1569,9 +1569,9 @@ def bottom_up_dot_product_attention(q,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
                           scale_factor=1.0,
-                          include_presence_q_in_weights=True,
-                          include_presence_k_in_weights=False,
-                          propagate_presence=False
+                          include_presence_q_in_weights=False,
+                          include_presence_k_in_weights=True,
+                          propagate_presence=True
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1653,9 +1653,9 @@ def bottom_up_dot_product_attention(q,
     # Drop out attention links for each head.
     scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
       scaled_assignment_weights, keep_prob=1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+
     if common_layers.should_generate_summaries() and make_image_summary:
       attention_image_summary(scaled_assignment_weights, image_shapes)
-
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/similarities'] = assignment_logits
@@ -1663,7 +1663,6 @@ def bottom_up_dot_product_attention(q,
       save_weights_to[scope.name+'/weights'] = scaled_assignment_weights
       save_weights_to[scope.name + '/q_presence_mat'] = q_presence_mat
       save_weights_to[scope.name + '/k_presence_mat'] = k_presence_mat
-
 
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
