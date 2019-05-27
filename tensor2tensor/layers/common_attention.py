@@ -1666,7 +1666,7 @@ def bottom_up_dot_product_attention(q,
 
     # [batch_size, heads length_q, length_kv] ->
     # [batch_size, length_q, length_kv]
-    aggregate_weights_over_heads = tf.reduce_sum(scaled_assignment_weights, axis=1)
+    aggregate_weights_over_heads = tf.reduce_sum(assignment_weights * k_presence_mat, axis=1)
     # [batch_size, length_q, length_kv] -> [batch_size, length_q]
     total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
 
@@ -1707,7 +1707,7 @@ def bottom_up_dot_product_attention(q,
 
     values = tf.matmul(scaled_assignment_weights, v)
 
-    return values, tf.expand_dims(new_q_presence, axis=-1)
+    return values, tf.expand_dims(new_q_presence * presence_q, axis=-1)
     
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
