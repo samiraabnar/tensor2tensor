@@ -1569,8 +1569,9 @@ def bottom_up_dot_product_attention(q,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
                           scale_factor=1.0,
-                          include_presence_q_in_weights=True,
-                          include_presence_k_in_weights=False
+                          include_presence_q_in_weights=False,
+                          include_presence_k_in_weights=True,
+                          propagate_presence=True
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1697,7 +1698,8 @@ def bottom_up_dot_product_attention(q,
       new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
 
     new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
-    new_q_presence = new_q_presence * presence_q
+    if propagate_presence:
+      new_q_presence = new_q_presence * presence_q
 
     if save_weights_to is not None:
       save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
