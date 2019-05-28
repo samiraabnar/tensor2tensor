@@ -1569,9 +1569,11 @@ def bottom_up_dot_product_attention(q,
                           presence_calc_mode='sigmoid', # | tanh | sigmoid
                           presence_softmax_temp = 1.0,
                           scale_factor=1.0,
-                          include_presence_q_in_weights=False,
-                          include_presence_k_in_weights=True,
-                          propagate_presence=True
+                          reset_presence_q=True,
+                          scale_weights_with_presenc_k=False,
+                          update_presence=False,
+                          propagate_presence=False,
+                          normalize_presence_logits_by_sum=False
   ):
   """Bottom-up dot-product attention.
    Args:
@@ -1616,7 +1618,7 @@ def bottom_up_dot_product_attention(q,
     length_q = common_layers.shape_list(q)[-2]
     length_kv = common_layers.shape_list(k)[-2]
 
-    if presence_q is None:  # [batch_size, length_q, 1]
+    if presence_q is None or reset_presence_q:  # [batch_size, length_q, 1]
       presence_q = tf.ones(shape=(tf.shape(q)[0], length_q, 1))
 
     if presence_k is None: # [batch_size, length_kv, 1]
@@ -1633,21 +1635,18 @@ def bottom_up_dot_product_attention(q,
     # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
     assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
+    assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
 
-    if include_presence_q_in_weights:
-      assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
-    else:
-      assignment_weights = tf.identity(assignment_weights, name="assignment_weights")
 
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
 
-    if include_presence_k_in_weights:
-      scaled_assignment_weights = tf.identity(assignment_weights * k_presence_mat,
-                         name="assignment_weights_scaled_with_k_presence_probs")
+    if scale_weights_with_presenc_k:
+      scaled_assignment_weights = tf.multiply(assignment_weights,k_presence_mat,
+                         name="assignment_weights_scaled_with_k_presence")
     else:
       scaled_assignment_weights = tf.identity(assignment_weights,
-                                              name="assignment_weights_scaled_with_k_presence_probs")
+                                              name="assignment_weights_scaled_with_k_presence")
 
 
     # Drop out attention links for each head.
@@ -1664,51 +1663,56 @@ def bottom_up_dot_product_attention(q,
       save_weights_to[scope.name + '/q_presence_mat'] = q_presence_mat
       save_weights_to[scope.name + '/k_presence_mat'] = k_presence_mat
 
-    # [batch_size, heads length_q, length_kv] ->
-    # [batch_size, length_q, length_kv]
-    aggregate_weights_over_heads = tf.reduce_sum(assignment_weights * k_presence_mat, axis=1)
-    # [batch_size, length_q, length_kv] -> [batch_size, length_q]
-    total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
 
-
-    # TODO(Dehghani): what makes most sense?
-    presence_calc_fn = {'softmax': tf.nn.softmax,
-               'sigmoid': tf.nn.sigmoid,
-               'tanh': tf.nn.tanh}
-
-    presence_calc_temp = {'softmax': presence_softmax_temp,
-                          'sigmoid': 1.0,
-                          'tanh': 1.0}
-
-    presence_logits = total_assigned_weight_per_q / \
-                      tf.expand_dims(tf.reduce_sum(total_assigned_weight_per_q,axis=-1), axis=-1)
-
-    if transform_presence_logits:
-      presence_logits_shape = tf.shape(presence_logits)
-      # [batch_size, length_q] --> [batch_size * length_q, 1]
-      presence_logits = tf.reshape(presence_logits, [-1, 1])
-      presence_logits = common_layers.dense(presence_logits, 1, use_bias=True,
-                                            name=name)
-      presence_logits = tf.reshape(presence_logits, presence_logits_shape)
-
-    if presence_calc_mode == 'softmax':
-      new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-1, name="q_presence")
+    if update_presence:
+      # [batch_size, heads length_q, length_kv] ->
+      # [batch_size, length_q, length_kv]
+      aggregate_weights_over_heads = tf.reduce_sum(assignment_weights * k_presence_mat, axis=1)
+      # [batch_size, length_q, length_kv] -> [batch_size, length_q]
+      total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
+    
+  
+      # TODO(Dehghani): what makes most sense?
+      presence_calc_fn = {'softmax': tf.nn.softmax,
+                 'sigmoid': tf.nn.sigmoid,
+                 'tanh': tf.nn.tanh}
+  
+      presence_calc_temp = {'softmax': presence_softmax_temp,
+                            'sigmoid': 1.0,
+                            'tanh': 1.0}
+  
+      presence_logits = total_assigned_weight_per_q
+      if normalize_presence_logits_by_sum:
+        presence_logits = presence_logits / \
+                          tf.expand_dims(tf.reduce_sum(total_assigned_weight_per_q,axis=-1), axis=-1)
+  
+      if transform_presence_logits:
+        presence_logits_shape = tf.shape(presence_logits)
+        # [batch_size, length_q] --> [batch_size * length_q, 1]
+        presence_logits = tf.reshape(presence_logits, [-1, 1])
+        presence_logits = common_layers.dense(presence_logits, 1, use_bias=True,
+                                              name=name)
+        presence_logits = tf.reshape(presence_logits, presence_logits_shape)
+  
+      if presence_calc_mode == 'softmax':
+        new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-1, name="q_presence")
+      else:
+        new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
+  
+      new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
+      if propagate_presence:
+        new_q_presence = new_q_presence * presence_q
+      
+      if save_weights_to is not None:
+        save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
+        save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
     else:
-      new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
-
-    new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
-    if propagate_presence:
-      new_q_presence = new_q_presence * presence_q
-
-    if save_weights_to is not None:
-      save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
-      save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
+      new_q_presence = presence_q
 
     # scaled_assignment_weights: [batch_size, num_heads, length_q, length_kv]
     # v: [batch_size, num_heads, length_k, embedding_dim]
     # dotproduct: [length_q, embedding]
     values = tf.matmul(scaled_assignment_weights, v)
-
     return values, new_q_presence
     
 def _generate_relative_positions_matrix(length_q, length_k,
