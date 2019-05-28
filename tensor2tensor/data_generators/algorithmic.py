@@ -543,7 +543,6 @@ class TinyAlgo(AlgorithmicIdentityBinary40):
     # Generate a small test dataset
     cls().generate_data(TinyAlgo.data_dir, None)
 
-
 @registry.register_problem
 class AlgorithmicCount(AlgorithmicProblem):
   """Problem spec for sorting numbers."""
@@ -571,16 +570,13 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   def generator(self, nbr_symbols, max_length, nbr_cases):
     """Generating for counting number of unique symbols in a sequence.
-
     The length of the sequence is drawn uniformly at random from [1, max_length]
     and then symbols are drawn uniformly at
     random from [0, nbr_symbols) until nbr_cases sequences have been produced.
-
     Args:
       nbr_symbols: number of symbols to use in each sequence.
       max_length: integer, maximum length of sequences to generate.
       nbr_cases: the number of cases to generate.
-
     Yields:
       A dictionary {"inputs": input-list, "targets": target-list} where
       target-list is input-list sorted.
@@ -666,7 +662,7 @@ class AlgorithmicCount100(AlgorithmicCount):
   @property
   def num_symbols(self):
     return 100
-  
+
 
 
 

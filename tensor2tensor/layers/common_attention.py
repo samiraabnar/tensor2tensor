@@ -1472,12 +1472,18 @@ def grouped_attention_multihead(query_antecedent,
     return o, extra_loss
 
 
-def harden_attention_weights(weights, hard_attention_k):
-  """Make attention weights non-0 only on the top-hard_attention_k ones."""
+def harden_attention_weights(weights, k, gumbel_noise_weight):
+  """Make attention weights non-0 only on the top k ones."""
+  if gumbel_noise_weight > 0.:
+    gumbel_noise = -tf.log(-tf.log(tf.random_uniform(tf.shape(weights),
+                                                     minval=1e-5,
+                                                     maxval=1 - 1e-5)))
+    weights += gumbel_noise * gumbel_noise_weight
+
   # Subtract the top-kth weight and zero-out all lower ones.
   # Note that currently in case of numerical ties it will retain more
   # than k elements. In the future, we may want to avoid this.
-  weights -= common_layers.top_kth_iterative(weights, hard_attention_k)
+  weights -= common_layers.top_kth_iterative(weights, k)
   weights = tf.nn.relu(weights)
   # Re-normalize the weights.
   weights_sum = tf.reduce_sum(weights, axis=-1, keep_dims=True)
@@ -1498,7 +1504,8 @@ def dot_product_attention(q,
                           dropout_broadcast_dims=None,
                           activation_dtype=None,
                           weight_dtype=None,
-                          hard_attention_k=0):
+                          hard_attention_k=0,
+                          gumbel_noise_weight=0.0):
   """Dot-product attention.
 
   Args:
@@ -1522,6 +1529,9 @@ def dot_product_attention(q,
       mixed precision.
     weight_dtype: The dtype weights are stored in when using mixed precision
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k)
+    gumbel_noise_weight: if > 0, apply Gumbel noise with weight
+      `gumbel_noise_weight` before picking top-k. This is a no op if
+      hard_attention_k <= 0.
 
   Returns:
     Tensor with shape [..., length_q, depth_v].
@@ -1536,7 +1546,8 @@ def dot_product_attention(q,
     logits = maybe_upcast(logits, activation_dtype, weight_dtype)
     weights = tf.nn.softmax(logits, name="attention_weights")
     if hard_attention_k > 0:
-      weights = harden_attention_weights(weights, hard_attention_k)
+      weights = harden_attention_weights(weights, hard_attention_k,
+                                         gumbel_noise_weight)
     weights = common_layers.cast_like(weights, q)
     if save_weights_to is not None:
       save_weights_to[scope.name] = weights
@@ -1549,32 +1560,18 @@ def dot_product_attention(q,
     return tf.matmul(weights, v)
 
 
-
 def bottom_up_dot_product_attention(q,
-                          k,
-                          v,
-                          bias,
-                          presence_q=None,
-                          presence_k=None,
-                          dropout_rate=0.0,
-                          image_shapes=None,
-                          name=None,
-                          make_image_summary=True,
-                          save_weights_to=None,
-                          dropout_broadcast_dims=None,
-                          activation_dtype=None,
-                          weight_dtype=None,
-                          assignment_softmax_temp=1.0,
-                          transform_presence_logits=True,
-                          presence_calc_mode='sigmoid', # | tanh | sigmoid
-                          presence_softmax_temp = 1.0,
-                          scale_factor=1.0,
-                          reset_presence_q=True,
-                          scale_weights_with_presenc_k=False,
-                          update_presence=False,
-                          propagate_presence=False,
-                          normalize_presence_logits_by_sum=False
-  ):
+                                    k,
+                                    v,
+                                    bias,
+                                    dropout_rate=0.0,
+                                    image_shapes=None,
+                                    name=None,
+                                    make_image_summary=True,
+                                    save_weights_to=None,
+                                    dropout_broadcast_dims=None,
+                                    weight_dtype=None,
+                                    **kwargs):
   """Bottom-up dot-product attention.
    Args:
     q: Tensor with shape [..., length_q, depth_k].
@@ -1600,28 +1597,35 @@ def bottom_up_dot_product_attention(q,
    Returns:
     Tensor with shape [..., length_q, depth_v].
   """
+  activation_dtype = kwargs.get("activation_dtype")
+  presence_q = kwargs.get("presence_q")
+  presence_k = kwargs.get("presence_q")
+  hparams = kwargs.get("hparams")
+
   with tf.variable_scope(
-    name, default_name="bottom_up_dot_product_attention",
+          name, default_name="bottom_up_dot_product_attention",
           values=[q, k, v]) as scope:
 
-    if scale_factor is None:
-      scale_factor = tf.rsqrt(tf.to_float(common_layers.shape_list(q)[2]))
+    if hparams.scale_factor is None:
+      hparams.scale_factor = tf.rsqrt(tf.to_float(common_layers.shape_list(q)[2]))
 
-    assignment_logits = tf.matmul(q * scale_factor, k, transpose_b=True)  # [..., length_q, length_kv]
+    assignment_logits = tf.matmul(q * hparams.scale_factor, k,
+                                  transpose_b=True)  # [..., length_q, length_kv]
     if bias is not None:
       bias = common_layers.cast_like(bias, assignment_logits)
       assignment_logits += bias
-    # If logits are fp16, upcast before softmax
-      assignment_logits = maybe_upcast(assignment_logits, activation_dtype, weight_dtype)
+      # If logits are fp16, upcast before softmax
+      assignment_logits = maybe_upcast(assignment_logits, activation_dtype,
+                                       weight_dtype)
 
     number_of_heads = common_layers.shape_list(assignment_logits)[1]
     length_q = common_layers.shape_list(q)[-2]
     length_kv = common_layers.shape_list(k)[-2]
 
-    if presence_q is None or reset_presence_q:  # [batch_size, length_q, 1]
+    if presence_q is None or hparams.reset_presence_q:  # [batch_size, length_q, 1]
       presence_q = tf.ones(shape=(tf.shape(q)[0], length_q, 1))
 
-    if presence_k is None: # [batch_size, length_kv, 1]
+    if presence_k is None:  # [batch_size, length_kv, 1]
       presence_k = tf.ones(shape=(tf.shape(k)[0], length_kv, 1))
 
     q_presence_mat = tf.tile(tf.expand_dims(presence_q, axis=1),
@@ -1634,78 +1638,86 @@ def bottom_up_dot_product_attention(q,
     # we incorporate the presence of q (upper-layer nodes) after Softmax on q axis
     # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
-    assignment_weights = tf.nn.softmax(assignment_logits/assignment_softmax_temp, axis=-2)
-    assignment_weights = tf.identity(assignment_weights * q_presence_mat, name="assignment_weights")
-
+    assignment_weights = tf.nn.softmax(
+      assignment_logits / hparams.assignment_softmax_temp, axis=-2)
+    assignment_weights = tf.identity(assignment_weights * q_presence_mat,
+                                     name="assignment_weights")
 
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
 
-    if scale_weights_with_presenc_k:
-      scaled_assignment_weights = tf.multiply(assignment_weights,k_presence_mat,
-                         name="assignment_weights_scaled_with_k_presence")
+    if hparams.scale_weights_with_presenc_k:
+      scaled_assignment_weights = tf.multiply(assignment_weights,
+                                              k_presence_mat,
+                                              name="assignment_weights_scaled_with_k_presence")
     else:
       scaled_assignment_weights = tf.identity(assignment_weights,
                                               name="assignment_weights_scaled_with_k_presence")
 
-
     # Drop out attention links for each head.
     scaled_assignment_weights = common_layers.dropout_with_broadcast_dims(
-      scaled_assignment_weights, keep_prob=1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+      scaled_assignment_weights, keep_prob=1.0 - dropout_rate,
+      broadcast_dims=dropout_broadcast_dims)
 
     if common_layers.should_generate_summaries() and make_image_summary:
       attention_image_summary(scaled_assignment_weights, image_shapes)
 
     if save_weights_to is not None:
-      save_weights_to[scope.name+'/similarities'] = assignment_logits
-      save_weights_to[scope.name+'/assignment_weights'] = assignment_weights
-      save_weights_to[scope.name+'/weights'] = scaled_assignment_weights
+      save_weights_to[scope.name + '/similarities'] = assignment_logits
+      save_weights_to[scope.name + '/assignment_weights'] = assignment_weights
+      save_weights_to[scope.name + '/weights'] = scaled_assignment_weights
       save_weights_to[scope.name + '/q_presence_mat'] = q_presence_mat
       save_weights_to[scope.name + '/k_presence_mat'] = k_presence_mat
 
-
-    if update_presence:
+    if hparams.update_presence:
       # [batch_size, heads length_q, length_kv] ->
       # [batch_size, length_q, length_kv]
-      aggregate_weights_over_heads = tf.reduce_sum(assignment_weights * k_presence_mat, axis=1)
+      aggregate_weights_over_heads = tf.reduce_sum(
+        assignment_weights * k_presence_mat, axis=1)
       # [batch_size, length_q, length_kv] -> [batch_size, length_q]
-      total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads, axis=-1)
-    
-  
+      total_assigned_weight_per_q = tf.reduce_sum(aggregate_weights_over_heads,
+                                                  axis=-1)
+
       # TODO(Dehghani): what makes most sense?
       presence_calc_fn = {'softmax': tf.nn.softmax,
-                 'sigmoid': tf.nn.sigmoid,
-                 'tanh': tf.nn.tanh}
-  
-      presence_calc_temp = {'softmax': presence_softmax_temp,
+                          'sigmoid': tf.nn.sigmoid,
+                          'tanh': tf.nn.tanh}
+
+      presence_calc_temp = {'softmax': hparams.presence_softmax_temp,
                             'sigmoid': 1.0,
                             'tanh': 1.0}
-  
+
       presence_logits = total_assigned_weight_per_q
-      if normalize_presence_logits_by_sum:
+      if hparams.normalize_presence_logits_by_sum:
         presence_logits = presence_logits / \
-                          tf.expand_dims(tf.reduce_sum(total_assigned_weight_per_q,axis=-1), axis=-1)
-  
-      if transform_presence_logits:
+                          tf.expand_dims(
+                            tf.reduce_sum(total_assigned_weight_per_q, axis=-1),
+                            axis=-1)
+
+      if hparams.transform_presence_logits:
         presence_logits_shape = tf.shape(presence_logits)
         # [batch_size, length_q] --> [batch_size * length_q, 1]
         presence_logits = tf.reshape(presence_logits, [-1, 1])
         presence_logits = common_layers.dense(presence_logits, 1, use_bias=True,
                                               name=name)
         presence_logits = tf.reshape(presence_logits, presence_logits_shape)
-  
-      if presence_calc_mode == 'softmax':
-        new_q_presence = tf.nn.softmax(presence_logits/presence_calc_temp[presence_calc_mode], axis=-1, name="q_presence")
+
+      if hparams.presence_calc_mode == 'softmax':
+        new_q_presence = tf.nn.softmax(
+          presence_logits / presence_calc_temp[hparams.presence_calc_mode], axis=-1,
+          name="q_presence")
       else:
-        new_q_presence = presence_calc_fn[presence_calc_mode](presence_logits/presence_calc_temp[presence_calc_mode], name="q_presence")
-  
+        new_q_presence = presence_calc_fn[hparams.presence_calc_mode](
+          presence_logits / presence_calc_temp[hparams.presence_calc_mode],
+          name="q_presence")
+
       new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
-      if propagate_presence:
+      if hparams.propagate_presence:
         new_q_presence = new_q_presence * presence_q
-      
+
       if save_weights_to is not None:
-        save_weights_to[scope.name+'/q_presence_probs'] = new_q_presence
-        save_weights_to[scope.name+'/q_presence_logits'] = presence_logits
+        save_weights_to[scope.name + '/q_presence_probs'] = new_q_presence
+        save_weights_to[scope.name + '/q_presence_logits'] = presence_logits
     else:
       new_q_presence = presence_q
 
@@ -1714,7 +1726,8 @@ def bottom_up_dot_product_attention(q,
     # dotproduct: [length_q, embedding]
     values = tf.matmul(scaled_assignment_weights, v)
     return values, new_q_presence
-    
+
+
 def _generate_relative_positions_matrix(length_q, length_k,
                                         max_relative_position,
                                         cache=False):
@@ -1796,7 +1809,8 @@ def dot_product_attention_relative(q,
                                    make_image_summary=True,
                                    cache=False,
                                    allow_memory=False,
-                                   hard_attention_k=0):
+                                   hard_attention_k=0,
+                                   gumbel_noise_weight=0.0):
   """Calculate relative position-aware dot-product self-attention.
 
   The attention calculation is augmented with learned representations for the
@@ -1821,6 +1835,9 @@ def dot_product_attention_relative(q,
       the length dimension of k/v/bias may be longer than the queries, and it is
       assumed that the extra memory entries precede the non-memory entries.
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k)
+    gumbel_noise_weight: if > 0, apply Gumbel noise with weight
+      `gumbel_noise_weight` before picking top-k. This is a no op if
+      hard_attention_k <= 0.
 
   Returns:
     A Tensor.
@@ -1858,7 +1875,8 @@ def dot_product_attention_relative(q,
       logits += bias
     weights = tf.nn.softmax(logits, name="attention_weights")
     if hard_attention_k > 0:
-      weights = harden_attention_weights(weights, hard_attention_k)
+      weights = harden_attention_weights(weights, hard_attention_k,
+                                         gumbel_noise_weight)
     if save_weights_to is not None:
       save_weights_to[scope.name] = weights
       save_weights_to[scope.name + "/logits"] = logits
@@ -4136,8 +4154,6 @@ def multihead_attention(query_antecedent,
                         num_heads,
                         dropout_rate,
                         attention_type="dot_product",
-                        presence_k=None,
-                        presence_q = None,
                         max_relative_position=None,
                         heads_share_relative_embedding=False,
                         add_relative_to_values=False,
@@ -4160,6 +4176,7 @@ def multihead_attention(query_antecedent,
                         recurrent_memory=None,
                         chunk_number=None,
                         hard_attention_k=0,
+                        gumbel_noise_weight=0.0,
                         max_area_width=1,
                         max_area_height=1,
                         memory_height=1,
@@ -4224,6 +4241,9 @@ def multihead_attention(query_antecedent,
     chunk_number: an optional integer Tensor with shape [batch] used to operate
       the recurrent_memory.
     hard_attention_k: integer, if > 0 triggers hard attention (picking top-k).
+    gumbel_noise_weight: if > 0, apply Gumbel noise with weight
+      `gumbel_noise_weight` before picking top-k. This is a no op if
+      hard_attention_k <= 0.
     max_area_width: the max width allowed for an area.
     max_area_height: the max height allowed for an area.
     memory_height: the height of the memory.
@@ -4349,12 +4369,10 @@ def multihead_attention(query_antecedent,
       q *= key_depth_per_head**-0.5
 
     additional_returned_value = None
-    return_additional_returned_value = False
     if callable(attention_type):  # Generic way to extend multihead_attention
       x = attention_type(q, k, v, **kwargs)
       if isinstance(x, tuple):
         x, additional_returned_value = x  # Unpack
-        return_additional_returned_value = True
     elif attention_type == "dot_product":
       if max_area_width > 1 or max_area_height > 1:
         x = area_attention.dot_product_area_attention(
@@ -4368,28 +4386,24 @@ def multihead_attention(query_antecedent,
             area_value_mode=area_value_mode,
             training=training)
       else:
-        x = dot_product_attention(q, k, v, bias, dropout_rate, image_shapes,
-                                  save_weights_to=save_weights_to,
-                                  make_image_summary=make_image_summary,
-                                  dropout_broadcast_dims=dropout_broadcast_dims,
-                                  activation_dtype=kwargs.get(
-                                      "activation_dtype"),
-                                  hard_attention_k=hard_attention_k)
+        x = dot_product_attention(
+            q, k, v, bias, dropout_rate, image_shapes,
+            save_weights_to=save_weights_to,
+            make_image_summary=make_image_summary,
+            dropout_broadcast_dims=dropout_broadcast_dims,
+            activation_dtype=kwargs.get("activation_dtype"),
+            hard_attention_k=hard_attention_k,
+            gumbel_noise_weight=gumbel_noise_weight)
+
     elif attention_type == "bottom_up_dot_product":
-      return_additional_returned_value = True
-      if presence_k is None and presence_q is not None:
-        # i.e. self-attention, not enc-dec attention
-        presence_k = presence_q
       x, additional_returned_value = bottom_up_dot_product_attention(
-          q, k, v, bias,
-          presence_q,
-          presence_k,
-          dropout_rate,
-          image_shapes,
-          save_weights_to=save_weights_to,
-          make_image_summary=make_image_summary,
-          dropout_broadcast_dims=dropout_broadcast_dims,
-          activation_dtype=kwargs.get("activation_dtype"))
+        q, k, v, bias,
+        dropout_rate,
+        image_shapes,
+        save_weights_to=save_weights_to,
+        make_image_summary=make_image_summary,
+        dropout_broadcast_dims=dropout_broadcast_dims,
+        **kwargs)
     elif attention_type == "dot_product_relative":
       x = dot_product_attention_relative(
           q,
@@ -4403,7 +4417,8 @@ def multihead_attention(query_antecedent,
           make_image_summary=make_image_summary,
           cache=cache is not None,
           allow_memory=recurrent_memory is not None,
-          hard_attention_k=hard_attention_k)
+          hard_attention_k=hard_attention_k,
+          gumbel_noise_weight=gumbel_noise_weight)
     elif attention_type == "dot_product_unmasked_relative_v2":
       x = dot_product_unmasked_self_attention_relative_v2(
           q,

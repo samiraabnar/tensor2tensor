@@ -54,7 +54,6 @@ transformer_encoder = transformer_layers.transformer_encoder
 transformer_ffn_layer = transformer_layers.transformer_ffn_layer
 transformer_bottomup_encoder = transformer_layers.transformer_bottomup_encoder
 
-
 def transformer_encode(encoder_function, inputs, target_space, hparams,
                        attention_weights=None, features=None, losses=None,
                        **kwargs):
@@ -269,7 +268,6 @@ class Transformer(t2t_model.T2TModel):
           recurrent_memory_by_layer=self.recurrent_memory_by_layer,
           chunk_number=chunk_number_each_example,
           )
-
     decoder_output = self.decode(
         decoder_input,
         encoder_output,
@@ -280,7 +278,6 @@ class Transformer(t2t_model.T2TModel):
         losses=losses,
         **decode_kwargs
         )
-
     expected_attentions = features.get("expected_attentions")
     if expected_attentions is not None:
       attention_loss = common_attention.encoder_decoder_attention_loss(
@@ -609,6 +606,17 @@ class Transformer(t2t_model.T2TModel):
         ret["outputs"] = ret["outputs"][:, :, partial_targets_length:]
     return ret
 
+  def get_decode_start_id(self):
+    """Returns the id of the first decoder input symbol.
+
+    The default case maps None to a vector of 0's for transformer. This method
+    can be overridden to return a different id by a model wanting to use a
+    different decoder start symbol. The id returned by this method is used to
+    index the embedding matrix, and retrieve the vector that will be used as the
+    first input to the decoder
+    """
+    return None
+
   def _fast_decode(self,
                    features,
                    decode_length,
@@ -752,8 +760,9 @@ class Transformer(t2t_model.T2TModel):
       # Shifts the targets along by one for the input which pads with zeros.
       # If the modality already maps GO to the zero embeddings this is not
       # needed.
-      targets = tf.cond(
-          tf.equal(i, 0), lambda: tf.zeros_like(targets), lambda: targets)
+      if not self.get_decode_start_id():
+        targets = tf.cond(
+            tf.equal(i, 0), lambda: tf.zeros_like(targets), lambda: targets)
 
       if positional_encoding is not None:
         targets += positional_encoding[:, i:i + 1]
@@ -772,7 +781,6 @@ class Transformer(t2t_model.T2TModel):
       targets = preprocess_targets(targets, i)
 
       bias = decoder_self_attention_bias[:, :, i:i + 1, :i + 1]
-
       with tf.variable_scope("body"):
         body_outputs = dp(
             self.decode,
@@ -809,6 +817,8 @@ class Transformer(t2t_model.T2TModel):
             tf.less(i, partial_targets_length), forced_logits, lambda: ret)
       return ret, cache
 
+    sos_id = self.get_decode_start_id() or 0
+
     ret = fast_decode(
         encoder_output=encoder_output,
         encoder_decoder_attention_bias=encoder_decoder_attention_bias,
@@ -821,7 +831,8 @@ class Transformer(t2t_model.T2TModel):
         top_beams=top_beams,
         alpha=alpha,
         batch_size=batch_size,
-        force_decode_length=self._decode_hparams.force_decode_length)
+        force_decode_length=self._decode_hparams.force_decode_length,
+        sos_id=sos_id)
     if partial_targets is not None:
       if beam_size <= 1 or top_beams <= 1:
         ret["outputs"] = ret["outputs"][:, partial_targets_length:]
@@ -1259,10 +1270,6 @@ class TransformerEncoder(t2t_model.T2TModel):
 class BottomupTransformerEncoder(t2t_model.T2TModel):
   """Bottomup Transformer encoder only."""
 
-  def __init__(self, *args, **kwargs):
-    super(BottomupTransformerEncoder, self).__init__(*args, **kwargs)
-    self.attention_weights = {}  # For visualizing attention heads.
-
   def body(self, features):
     hparams = self._hparams
     inputs = features["inputs"]
@@ -1279,8 +1286,7 @@ class BottomupTransformerEncoder(t2t_model.T2TModel):
       encoder_input,
       encoder_self_attention_bias,
       hparams,
-      nonpadding=features_to_nonpadding(features, "inputs"),
-      save_weights_to=self.attention_weights)
+      nonpadding=features_to_nonpadding(features, "inputs"))
 
     tf.summary.histogram("encoder_output_presence", encoder_output_presence)
 
@@ -1314,7 +1320,7 @@ def features_to_nonpadding(features, inputs_or_targets="inputs"):
   return None
 
 
-def transformer_prepare_decoder(targets, hparams, features=None):
+def transformer_prepare_decoder(targets, hparams, features=None, pad=None):
   """Prepare one shard of the model for the decoder.
 
   Args:
@@ -1322,6 +1328,7 @@ def transformer_prepare_decoder(targets, hparams, features=None):
     hparams: run hyperparameters
     features: optionally pass the entire features dictionary as well. This is
       needed now for "packed" datasets.
+    pad: vector to use for padding when shifting targets right
 
   Returns:
     decoder_input: a Tensor, bottom of decoder stack
@@ -1354,7 +1361,7 @@ def transformer_prepare_decoder(targets, hparams, features=None):
   if hparams.proximity_bias:
     decoder_self_attention_bias += common_attention.attention_bias_proximal(
         common_layers.shape_list(targets)[1])
-  decoder_input = common_layers.shift_right_3d(targets)
+  decoder_input = common_layers.shift_right_3d(targets, pad)
   if hparams.pos == "timing":
     if targets_position is not None:
       decoder_input = common_attention.add_timing_signal_1d_given_position(
@@ -1440,6 +1447,7 @@ def transformer_decoder_layer(decoder_input,
           recurrent_memory=recurrent_memory,
           chunk_number=chunk_number,
           hard_attention_k=hparams.get("hard_attention_k", 0),
+          gumbel_noise_weight=hparams.get("gumbel_noise_weight", 0.0),
           max_area_width=max_area_width,
           max_area_height=max_area_height,
           memory_height=memory_height,
@@ -1475,6 +1483,7 @@ def transformer_decoder_layer(decoder_input,
             weight_dtype=hparams.get("weight_dtype", "float32"),
             layer_collection=layer_collection,
             hard_attention_k=hparams.get("hard_attention_k", 0),
+            gumbel_noise_weight=hparams.get("gumbel_noise_weight", 0.0),
             max_area_width=max_area_width,
             max_area_height=max_area_height,
             memory_height=memory_height,
@@ -1586,8 +1595,8 @@ def transformer_decoder(decoder_input,
           losses=losses,
           layer_collection=layer_collection,
           recurrent_memory_by_layer=recurrent_memory_by_layer,
-          chunk_number=chunk_number,
-      )
+          chunk_number=chunk_number
+          )
 
     # if normalization is done in layer_preprocess, then it should also be done
     # on the output, since the output can grow very large, being the sum of
@@ -1709,6 +1718,7 @@ def transformer_base_v1():
   hparams.add_hparam("unidirectional_encoder", False)
   # For hard attention.
   hparams.add_hparam("hard_attention_k", 0)
+  hparams.add_hparam("gumbel_noise_weight", 0.0)
   return hparams
 
 
@@ -2123,11 +2133,6 @@ def transformer_small():
   hparams.num_heads = 4
   return hparams
 
-@registry.register_hparams
-def transformer_tiny_tall():
-  hparams = transformer_tiny()
-  hparams.num_hidden_layers = 4
-  return hparams
 
 @registry.register_hparams
 def transformer_l2():
@@ -2483,6 +2488,12 @@ def transformer_big_tpu():
 
 
 @registry.register_hparams
+def transformer_tiny_tall():
+  hparams = transformer_tiny()
+  hparams.num_hidden_layers = 4
+  return hparams
+
+@registry.register_hparams
 def transformer_tiny_tpu():
   hparams = transformer_tiny()
   update_hparams_for_tpu(hparams)
@@ -2826,4 +2837,120 @@ def transformer_imagenet64_memory_v0():
 
   hparams.max_relative_position = 3072
 
+  return hparams
+
+
+def update_hparams_for_bottomup_transformer(hparams):
+
+  hparams.add_hparam("assignment_softmax_temp", 1.0)
+  hparams.add_hparam("transform_presence_logits", True)
+  hparams.add_hparam("presence_calc_mode", 'sigmoid') # | tanh | sigmoid
+  hparams.add_hparam("presence_softmax_temp", 1.0)
+  hparams.add_hparam("scale_factor", 1.0)
+  hparams.add_hparam("reset_presence_q", True)
+  hparams.add_hparam("scale_weights_with_presenc_k", True)
+  hparams.add_hparam("update_presence", True)
+  hparams.add_hparam("propagate_presence", False)
+  hparams.add_hparam("normalize_presence_logits_by_sum", False)
+
+  return hparams
+
+
+@registry.register_hparams
+def bottomup_transformer_tiny_tall():
+  hparams = transformer_tiny_tall()
+  hparams = update_hparams_for_bottomup_transformer(hparams)
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_nop_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k= False
+  hparams.update_presence = False
+
+  return hparams
+
+
+@registry.register_hparams
+def bottomup_transformer_nok_simplep_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = False
+  hparams.update_presence = True
+
+  return hparams
+
+
+@registry.register_hparams
+def bottomup_transformer_nok_normp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = False
+  hparams.update_presence = True
+  hparams.propagate_presence = False
+  hparams.normalize_presence_logits_by_sum = True
+
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_nok_pp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = False
+  hparams.update_presence = True
+  hparams.propagate_presence = True
+  hparams.normalize_presence_logits_by_sum = False
+
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_nok_normpp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = False
+  hparams.update_presence = True
+  hparams.propagate_presence = True
+  hparams.normalize_presence_logits_by_sum = True
+
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_wk_normp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = True
+  hparams.update_presence = True
+  hparams.propagate_presence = False
+  hparams.normalize_presence_logits_by_sum = True
+
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_wk_pp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = True
+  hparams.update_presence = True
+  hparams.propagate_presence = True
+  hparams.normalize_presence_logits_by_sum = False
+
+  return hparams
+
+@registry.register_hparams
+def bottomup_transformer_wk_normpp_tiny_tall():
+  hparams = bottomup_transformer_tiny_tall()
+
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = True
+  hparams.update_presence = True
+  hparams.propagate_presence = True
+  hparams.normalize_presence_logits_by_sum = True
   return hparams
