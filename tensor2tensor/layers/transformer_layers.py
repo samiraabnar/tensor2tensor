@@ -26,7 +26,6 @@ from tensor2tensor.utils import mlperf_log
 
 import tensorflow as tf
 
-
 # TODO(lukaszkaiser): remove this function when not needed any more.
 def layers():
   return common_layers.layers()
@@ -213,6 +212,7 @@ def transformer_encoder(encoder_input,
               activation_dtype=hparams.get("activation_dtype", "float32"),
               weight_dtype=hparams.get("weight_dtype", "float32"),
               hard_attention_k=hparams.get("hard_attention_k", 0),
+              gumbel_noise_weight=hparams.get("gumbel_noise_weight", 0.0),
               max_area_width=max_area_width,
               max_area_height=max_area_height,
               memory_height=memory_height,
@@ -240,16 +240,17 @@ def transformer_encoder(encoder_input,
 
 
 def transformer_bottomup_encoder(encoder_input,
-                            encoder_self_attention_bias,
-                            hparams,
-                            name="encoder",
-                            nonpadding=None,
-                            save_weights_to=None,
-                            make_image_summary=True,
-                            losses=None,
-                            attn_bias_for_padding=None):
+                        encoder_self_attention_bias,
+                        hparams,
+                        name="encoder",
+                        nonpadding=None,
+                        save_weights_to=None,
+                        make_image_summary=True,
+                        losses=None,
+                        attn_bias_for_padding=None):
   """A stack of transformer layers.
-   Args:
+
+  Args:
     encoder_input: a Tensor
     encoder_self_attention_bias: bias Tensor for self-attention
        (see common_attention.attention_bias())
@@ -268,9 +269,11 @@ def transformer_bottomup_encoder(encoder_input,
     losses: optional list onto which to append extra training losses
     attn_bias_for_padding: Padded attention bias in case a unidirectional
       encoder is being used where future attention is masked.
-   Returns:
+
+  Returns:
     y: a Tensors
   """
+
   x = encoder_input
   attention_dropout_broadcast_dims = (
       common_layers.comma_separated_string_to_integer_list(
@@ -301,10 +304,19 @@ def transformer_bottomup_encoder(encoder_input,
     pad_remover = None
     if hparams.use_pad_remover and not common_layers.is_xla_compiled():
       pad_remover = expert_utils.PadRemover(padding)
+
     presence_y = None
     for layer in range(hparams.num_encoder_layers or hparams.num_hidden_layers):
       with tf.variable_scope("layer_%d" % layer):
         with tf.variable_scope("self_attention"):
+          if layer < hparams.get("num_area_layers", 0):
+            max_area_width = hparams.get("max_area_width", 1)
+            max_area_height = hparams.get("max_area_height", 1)
+            memory_height = hparams.get("memory_height", 1)
+          else:
+            max_area_width = 1
+            max_area_height = 1
+            memory_height = 1
           y, presence_y = common_attention.multihead_attention(
               common_layers.layer_preprocess(x, hparams),
               None,
@@ -315,8 +327,6 @@ def transformer_bottomup_encoder(encoder_input,
               hparams.num_heads,
               hparams.attention_dropout,
               attention_type="bottom_up_dot_product",
-              presence_k=presence_y,
-              presence_q=presence_y,
               max_relative_position=hparams.max_relative_position,
               heads_share_relative_embedding=(
                   hparams.heads_share_relative_embedding),
@@ -328,7 +338,18 @@ def transformer_bottomup_encoder(encoder_input,
               vars_3d=hparams.get("attention_variables_3d"),
               activation_dtype=hparams.get("activation_dtype", "float32"),
               weight_dtype=hparams.get("weight_dtype", "float32"),
-              hard_attention_k=hparams.get("hard_attention_k", 0))
+              hard_attention_k=hparams.get("hard_attention_k", 0),
+              max_area_width=max_area_width,
+              max_area_height=max_area_height,
+              memory_height=memory_height,
+              area_key_mode=hparams.get("area_key_mode", "none"),
+              area_value_mode=hparams.get("area_value_mode", "none"),
+              training=(hparams.get("mode", tf.estimator.ModeKeys.TRAIN)
+                        == tf.estimator.ModeKeys.TRAIN),
+              presence_k=presence_y,
+              presence_q=presence_y,
+              current_depth=layer,
+              hparams=hparams)
           x = common_layers.layer_postprocess(x, y, hparams)
         with tf.variable_scope("ffn"):
           y = transformer_ffn_layer(
