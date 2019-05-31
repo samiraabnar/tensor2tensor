@@ -1571,7 +1571,7 @@ def bottom_up_dot_product_attention(q,
                           scale_factor=1.0,
                           reset_presence_q=True,
                           scale_weights_with_presenc_k=False,
-                          update_presence=False,
+                          update_presence=True,
                           propagate_presence=False,
                           normalize_presence_logits_by_sum=False
   ):
