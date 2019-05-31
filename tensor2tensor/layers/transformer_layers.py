@@ -348,6 +348,7 @@ def transformer_bottomup_encoder(encoder_input,
                         == tf.estimator.ModeKeys.TRAIN),
               presence_k=presence_y,
               presence_q=presence_y,
+              current_depth=layer,
               hparams=hparams)
           x = common_layers.layer_postprocess(x, y, hparams)
         with tf.variable_scope("ffn"):

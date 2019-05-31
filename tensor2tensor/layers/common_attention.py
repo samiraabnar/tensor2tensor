@@ -1600,6 +1600,7 @@ def bottom_up_dot_product_attention(q,
   activation_dtype = kwargs.get("activation_dtype")
   presence_q = kwargs.get("presence_q")
   presence_k = kwargs.get("presence_q")
+  current_depth = kwargs.get("current_depth")
   hparams = kwargs.get("hparams")
 
   with tf.variable_scope(
@@ -1638,6 +1639,10 @@ def bottom_up_dot_product_attention(q,
     # we incorporate the presence of q (upper-layer nodes) after Softmax on q axis
     # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
+
+    softmax_temp = hparams.assignment_softmax_temp
+    if hparams.similarity_softmax_temp_decay_step > 0:
+      softmax_temp /=  (1 + hparams.similarity_softmax_temp_decay_rate * current_depth / hparams.similarity_softmax_temp_decay_step)
     assignment_weights = tf.nn.softmax(
       assignment_logits / hparams.assignment_softmax_temp, axis=-2)
     assignment_weights = tf.identity(assignment_weights * q_presence_mat,

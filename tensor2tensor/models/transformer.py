@@ -2843,6 +2843,8 @@ def transformer_imagenet64_memory_v0():
 def update_hparams_for_bottomup_transformer(hparams):
 
   hparams.add_hparam("assignment_softmax_temp", 1.0)
+  hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.1)
+  hparams.add_hparam("similarity_softmax_temp_decay_step", 1)
   hparams.add_hparam("transform_presence_logits", True)
   hparams.add_hparam("presence_calc_mode", 'sigmoid') # | tanh | sigmoid
   hparams.add_hparam("presence_softmax_temp", 1.0)
@@ -2852,6 +2854,7 @@ def update_hparams_for_bottomup_transformer(hparams):
   hparams.add_hparam("update_presence", True)
   hparams.add_hparam("propagate_presence", False)
   hparams.add_hparam("normalize_presence_logits_by_sum", False)
+
 
   return hparams
 
