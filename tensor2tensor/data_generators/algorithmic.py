@@ -664,5 +664,3 @@ class AlgorithmicCount100(AlgorithmicCount):
     return 100
 
 
-
-

@@ -97,6 +97,7 @@ MODULES = [
     "tensor2tensor.data_generators.yelp_full",
     "tensor2tensor.envs.mujoco_problems",
     "tensor2tensor.envs.tic_tac_toe_env_problem",
+    "tensor2tensor.data_generators.algorithmic_reber",
 ]
 ALL_MODULES = list(MODULES)
 
