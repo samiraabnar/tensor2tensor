@@ -549,7 +549,7 @@ class AlgorithmicCount(AlgorithmicProblem):
 
   @property
   def num_symbols(self):
-    return max(self.train_length, self.dev_length)
+    raise NotImplementedError()
 
 
   @property
@@ -588,7 +588,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       # Sample the sequence length.
       length = np.random.randint(max_length) + 1
       targets = int(np.random.randint(np.min([nbr_symbols, length])) + 1)
-      selected_symbols = np.random.choice(nbr_symbols, size=targets, replace=False)+1
+      selected_symbols = np.random.choice(nbr_symbols, size=targets, replace=False)
 
       inputs = list(selected_symbols)
       if length > targets:

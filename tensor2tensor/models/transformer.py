@@ -1290,6 +1290,7 @@ class BottomupTransformerEncoder(t2t_model.T2TModel):
       encoder_input,
       encoder_self_attention_bias,
       hparams,
+      save_weights_to=self.attention_weights,
       nonpadding=features_to_nonpadding(features, "inputs"))
 
     tf.summary.histogram("encoder_output_presence", encoder_output_presence)
