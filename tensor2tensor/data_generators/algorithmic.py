@@ -563,6 +563,9 @@ class AlgorithmicCount(AlgorithmicProblem):
   @property
   def dev_length(self):
     return self.train_length
+    
+  def class_labels(self, data_dir=None):
+    return ["ID_%d" % i for i in range(self.num_classes)]
 
 #  @property
 #  def vocab_type(self):
@@ -585,7 +588,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       # Sample the sequence length.
       length = np.random.randint(max_length) + 1
       targets = int(np.random.randint(np.min([nbr_symbols, length])) + 1)
-      selected_symbols = np.random.choice(nbr_symbols, size=targets, replace=False)
+      selected_symbols = np.random.choice(nbr_symbols, size=targets, replace=False)+1
 
       inputs = list(selected_symbols)
       if length > targets:
@@ -595,7 +598,7 @@ class AlgorithmicCount(AlgorithmicProblem):
       np.random.shuffle(inputs)
 
       inputs = list(map(int,inputs))
-      yield {"inputs": inputs, "targets": [targets]}
+      yield {"inputs": inputs, "targets": [targets - 1]}
 
   def generate_data(self, data_dir, _, task_id=-1):
 
@@ -608,8 +611,6 @@ class AlgorithmicCount(AlgorithmicProblem):
             new_case[feature] = [
                 i + text_encoder.NUM_RESERVED_TOKENS for i in case[feature]
             ] + [text_encoder.EOS_ID]
-          elif feature == "targets":
-            new_case[feature] = [i-1 for i in case[feature]]
           else:
             new_case[feature] = case[feature]
         yield new_case
@@ -632,7 +633,6 @@ class AlgorithmicCount(AlgorithmicProblem):
                     "targets": self.num_classes}
 
     p.input_space_id = problem.SpaceID.DIGIT_0
-    p.target_space_id = problem.SpaceID.DIGIT_1
 
   def example_reading_spec(self):
     data_fields = {"inputs": tf.VarLenFeature(tf.int64), "targets": tf.FixedLenFeature([1], tf.int64), }
@@ -643,7 +643,7 @@ class AlgorithmicCount(AlgorithmicProblem):
   def feature_encoders(self, data_dir):
     encoder = text_encoder.TextEncoder()
     return {"inputs": encoder,
-            "targets": text_encoder.ClassLabelEncoder(["ID_%d" % i for i in range(self.num_classes)])}
+            "targets": text_encoder.ClassLabelEncoder(self.class_labels())}
 
 
 @registry.register_problem

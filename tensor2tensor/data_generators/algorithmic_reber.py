@@ -66,7 +66,7 @@ class ReberClassification(AlgorithmicProblem):
       else:
         inputs = reber.embedded_reber()
 
-      yield {"inputs": inputs, "targets": self.class_labels[c]}
+      yield {"inputs": inputs, "label": int(c)}
 
   def generate_data(self, data_dir, _, task_id=-1):
 
@@ -78,7 +78,7 @@ class ReberClassification(AlgorithmicProblem):
       shuffle=False)
 
   def generate_encoded_samples(self, nbr_symbols, max_length, nbr_cases):
-    generator = self.generate_samples(nbr_symbols, max_length, nbr_cases)
+    generator = self.generator(nbr_symbols, max_length, nbr_cases)
     encoder = text_encoder.ByteTextEncoder()
     for sample in generator:
       inputs = encoder.encode(sample["inputs"])

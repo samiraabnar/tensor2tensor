@@ -1269,7 +1269,11 @@ class TransformerEncoder(t2t_model.T2TModel):
 @registry.register_model
 class BottomupTransformerEncoder(t2t_model.T2TModel):
   """Bottomup Transformer encoder only."""
-
+  
+  def __init__(self, *args, **kwargs):
+    super(BottomupTransformerEncoder, self).__init__(*args, **kwargs)
+    self.attention_weights = {}  # For visualizing attention heads.
+    
   def body(self, features):
     hparams = self._hparams
     inputs = features["inputs"]
@@ -2843,7 +2847,7 @@ def transformer_imagenet64_memory_v0():
 def update_hparams_for_bottomup_transformer(hparams):
 
   hparams.add_hparam("assignment_softmax_temp", 1.0)
-  hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.1)
+  hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.9)
   hparams.add_hparam("similarity_softmax_temp_decay_step", 1)
   hparams.add_hparam("transform_presence_logits", True)
   hparams.add_hparam("presence_calc_mode", 'sigmoid') # | tanh | sigmoid
@@ -2956,4 +2960,17 @@ def bottomup_transformer_wk_normpp_tiny_tall():
   hparams.update_presence = True
   hparams.propagate_presence = True
   hparams.normalize_presence_logits_by_sum = True
+  return hparams
+  
+@registry.register_hparams
+def bottomup_transformer_wk_normpp_tiny_tall_moreheads():
+  hparams = bottomup_transformer_tiny_tall()
+  hparams.num_heads = 16
+  
+  hparams.reset_presence_q = True
+  hparams.scale_weights_with_presenc_k = True
+  hparams.update_presence = True
+  hparams.propagate_presence = True
+  hparams.normalize_presence_logits_by_sum = True
+  
   return hparams
