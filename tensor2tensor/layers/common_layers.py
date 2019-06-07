@@ -33,6 +33,7 @@ from tensorflow.python.framework import function
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import control_flow_util
 from tensorflow.python.ops import inplace_ops
+from tensor2tensor.layers import discretization
 
 
 _cached_layers = None
@@ -4231,3 +4232,59 @@ class WeightNorm(tf.keras.layers.Wrapper):
   def compute_output_shape(self, input_shape):
     return tf.TensorShape(
         self.layer.compute_output_shape(input_shape).as_list())
+
+def gumbel_softmax(logits,
+                   gumbel_noise_factor=0.8,
+                   temperature=0.5,
+                   temperature_warmup_steps=150000,
+                   learn_temp= False,
+                   straight_through=False,
+                   name = None,
+                   axis=-1):
+  """Sample from the Gumbel-Softmax distribution and optionally discretize.
+  Args:
+    logits: [batch_size, (length, width), n_class] unnormalized log-probs
+    temperature: softmax temperature non-negative scalar
+    temperature_warmup_steps: Number of steps it takes to decay temperature to
+      0.
+    straight_through: if True, take argmax, but differentiate wrt soft sample y
+  Returns:
+    [batch_size, (length, width) , n_class] sample from the Gumbel-Softmax distribution.
+    If straight_through=True, then the returned sample will be one-hot,
+    otherwise it will be a probability distribution over classes
+  """
+
+  with tf.variable_scope(name, default_name="gumbel_softmax"):
+    logsm = tf.nn.log_softmax(logits, axis=axis)
+
+    # Gumbel-softmax sample
+    gumbel_samples = discretization.gumbel_sample(
+      shape_list(logsm))* gumbel_noise_factor
+
+    # temperature
+    if learn_temp:
+      tau = tf.Variable(temperature, name="temperature", trainable=learn_temp)
+
+    elif temperature_warmup_steps is not None:
+      steps = temperature_warmup_steps
+      gumbel_samples *= inverse_exp_decay(steps // 5) * 0.5
+      temperature = 1.2 - inverse_lin_decay(steps)
+      # 10% of the time keep reasonably high temperature to keep learning.
+      tau = tf.cond(
+        tf.less(tf.random_uniform([]), 0.9), lambda: temperature,
+        lambda: tf.random_uniform([], minval=0.5, maxval=1.0))
+    else:
+      tau =  temperature
+
+    tf.contrib.summary.histogram("softmax temperature", tau)
+
+    y = tf.nn.softmax((logsm + gumbel_samples) / tau, axis=axis)
+
+    # tf.summary.histogram("max-log-gumbel-softmax", tf.reshape(
+    #   -tf.reduce_max(logsm, axis=-1), [-1]))
+
+    if straight_through:
+      # Calculate the argmax and construct one-hot vectors.
+      y_hard = tf.cast(tf.equal(y,tf.reduce_max(y,axis=-1,keepdims=True)),y.dtype)
+      y = tf.stop_gradient(y_hard - y) + y
+  return y
