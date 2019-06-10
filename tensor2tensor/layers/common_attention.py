@@ -1646,7 +1646,8 @@ def bottom_up_dot_product_attention(q,
     if hparams.similarity_softmax_temp_decay_step > 0:
       softmax_temp /=  (1.0 + hparams.similarity_softmax_temp_decay_rate * current_depth / hparams.similarity_softmax_temp_decay_step)
     
-    assignment_logits = tf.reshape(assignment_logits, shape=(batch_size, number_of_heads*length_q,length_kv))
+    if hparams.similarity_softmax_over_all_heads:
+        assignment_logits = tf.reshape(assignment_logits, shape=(batch_size, number_of_heads*length_q,length_kv))
     if hparams.use_gumbel:
       assignment_weights = common_layers.gumbel_softmax(assignment_logits,
                                           gumbel_noise_factor=0.8,
@@ -1659,8 +1660,9 @@ def bottom_up_dot_product_attention(q,
     else:
       assignment_weights = tf.nn.softmax(
         assignment_logits / softmax_temp, axis=-2, name = "assignment_probs")
-        
-    assignment_weights = tf.reshape(assignment_weights, shape=(batch_size, number_of_heads, length_q,length_kv))
+     
+    if hparams.similarity_softmax_over_all_heads:
+        assignment_weights = tf.reshape(assignment_weights, shape=(batch_size, number_of_heads, length_q,length_kv))
     assignment_weights = tf.identity(assignment_weights * q_presence_mat,
                                        name="assignment_weights")
 
