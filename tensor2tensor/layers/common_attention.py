@@ -1599,7 +1599,7 @@ def bottom_up_dot_product_attention(q,
   """
   activation_dtype = kwargs.get("activation_dtype")
   presence_q = kwargs.get("presence_q")
-  presence_k = kwargs.get("presence_q")
+  presence_k = kwargs.get("presence_k")
   current_depth = kwargs.get("current_depth")
   hparams = kwargs.get("hparams")
 
@@ -1705,11 +1705,13 @@ def bottom_up_dot_product_attention(q,
       # TODO(Dehghani): what makes most sense?
       presence_calc_fn = {'softmax': tf.nn.softmax,
                           'sigmoid': tf.nn.sigmoid,
-                          'tanh': tf.nn.tanh}
+                          'tanh': tf.nn.tanh,
+                          'leaky_relu': tf.nn.leaky_relu}
 
       presence_calc_temp = {'softmax': hparams.presence_softmax_temp,
                             'sigmoid': 1.0,
-                            'tanh': 1.0}
+                            'tanh': 1.0,
+                            'leaky_relu': 1.0}
                             
       presence_calc_temp['softmax'] = hparams.presence_softmax_temp
       if hparams.presence_softmax_temp_decay_step > 0:
