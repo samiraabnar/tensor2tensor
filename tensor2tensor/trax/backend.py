@@ -19,6 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import contextlib
 import gin
 
 import jax
@@ -30,6 +31,7 @@ import numpy as onp
 
 
 _JAX_BACKEND = {
+    "name": "jax",
     "np": jnp,
     "logsumexp": jax_special.logsumexp,
     "jit": jax.jit,
@@ -38,15 +40,20 @@ _JAX_BACKEND = {
     "random_uniform": jax_random.uniform,
     "random_normal": jax_random.normal,
     "random_bernoulli": jax_random.bernoulli,
-    "random_get_prng": jax_random.PRNGKey,
+    "random_get_prng": jax.jit(jax_random.PRNGKey),
     "random_split": jax_random.split,
 }
 
 
 _NUMPY_BACKEND = {
+    "name": "numpy",
     "np": onp,
     "jit": (lambda f: f),
 }
+
+
+def get_name():
+  return backend()["name"]
 
 
 def logsumexp(*args, **kwargs):
@@ -105,8 +112,21 @@ numpy = NumpyBackend()
 
 
 
+override_backend_name = None
+
+
 @gin.configurable()
 def backend(name="jax"):
+  name = name if not override_backend_name else override_backend_name
   if name == "numpy":
     return _NUMPY_BACKEND
   return _JAX_BACKEND
+
+
+@contextlib.contextmanager
+def use_backend(name):
+  global override_backend_name
+  prev_name = override_backend_name
+  override_backend_name = name
+  yield
+  override_backend_name = prev_name

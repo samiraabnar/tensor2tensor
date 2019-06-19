@@ -89,6 +89,7 @@ class PPOLearner(PolicyLearner):
                   distributional_size=self._distributional_size,
                   distributional_subscale=self._distributional_subscale,
                   distributional_threshold=self._distributional_threshold,
+                  epoch=epoch if simulated else -1,
                   frame_stack_size=self.frame_stack_size,
                   force_beginning_resets=simulated))
 
@@ -127,6 +128,7 @@ class PPOLearner(PolicyLearner):
             train_summary_op,
             eval_summary_op,
             initializers,
+            epoch,
             report_fn=report_fn,
             model_save_fn=model_save_fn)
 
@@ -165,6 +167,7 @@ def _define_train(
     distributional_size=1,
     distributional_subscale=0.04,
     distributional_threshold=0.0,
+    epoch=-1,
     **collect_kwargs
 ):
   """Define the training setup."""
@@ -181,7 +184,8 @@ def _define_train(
       memory, ppo_hparams, train_env.action_space, train_env.batch_size,
       distributional_size=distributional_size,
       distributional_subscale=distributional_subscale,
-      distributional_threshold=distributional_threshold)
+      distributional_threshold=distributional_threshold,
+      epoch=epoch)
   train_summary = tf.summary.merge([collect_summary, ppo_summary])
 
   if ppo_hparams.eval_every_epochs:
@@ -210,6 +214,7 @@ def _run_train(ppo_hparams,
                train_summary_op,
                eval_summary_op,
                initializers,
+               epoch,
                report_fn=None,
                model_save_fn=None):
   """Train."""
@@ -259,11 +264,14 @@ def _run_train(ppo_hparams,
         if (model_saver and ppo_hparams.save_models_every_epochs and
             (epoch_index % ppo_hparams.save_models_every_epochs == 0 or
              (epoch_index + 1) == num_target_iterations)):
-          ckpt_path = os.path.join(
-              model_dir,
-              "model.ckpt-{}".format(tf.train.global_step(sess, global_step))
+          ckpt_name = "model.ckpt-{}".format(
+              tf.train.global_step(sess, global_step)
           )
-          model_saver.save(sess, ckpt_path)
+          # Keep the last checkpoint from each epoch in a separate directory.
+          epoch_dir = os.path.join(model_dir, "epoch_{}".format(epoch))
+          tf.gfile.MakeDirs(epoch_dir)
+          for ckpt_dir in (model_dir, epoch_dir):
+            model_saver.save(sess, os.path.join(ckpt_dir, ckpt_name))
           if model_save_fn:
             model_save_fn(model_dir)
 

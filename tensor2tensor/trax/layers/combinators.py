@@ -23,8 +23,61 @@ import operator
 import six
 
 from tensor2tensor.trax import backend
-from tensor2tensor.trax.backend import numpy as np
 from tensor2tensor.trax.layers import base
+
+
+def Model(*layers):
+  """Ensures that a layer or list of layers can be treated as a model.
+
+  Currently, any subclass of base.Layer can be treated as a model.
+
+  Args:
+    *layers: One or more layer objects. In fuller detail, the list may contain
+        nested sublists, and the top-level list can also be a tuple.
+
+  Returns:
+    A single object that treated as a model, e.g., trained or evaluated.
+  """
+  return Serial(*layers)
+
+
+def _deep_flatten(xs):  # pylint: disable=invalid-name
+  for x in xs:
+    if isinstance(x, (list, tuple)):
+      for y in _deep_flatten(x):
+        yield y
+    else:
+      yield x
+
+
+def _ensure_sublayers(layers):  # pylint: disable=invalid-name
+  """Ensures that elements in a layer list are layers.
+
+  Args:
+    layers: A tuple or list whose elements can each be a layer, tuple, or list,
+        and so on recursively.
+
+  Returns:
+    An analogous collection of layers in which embedded layer lists are
+    wrapped in Serial layer instances.
+  """
+  if not layers:  # None or an empty list can signal a no-op.
+    return Serial([])  # no-op, but still handles shapes and initialization
+  elif isinstance(layers, (list, tuple)):
+    sublayers_not_lists = []
+    for layer in layers:
+      sublayers_not_lists.append(
+          Serial(layer) if isinstance(layer, (list, tuple)) else layer)
+    return sublayers_not_lists
+  else:
+    raise TypeError(type(layers))
+
+
+def _pop_rng_and_split(args_dict, n_copies):  # pylint: disable=invalid-name
+  rng = args_dict.pop('rng', None)
+  if rng is None:
+    return (None,) * n_copies
+  return backend.random.split(rng, n_copies)
 
 
 class Serial(base.Layer):
@@ -32,70 +85,82 @@ class Serial(base.Layer):
 
   def __init__(self, *layers):
     super(Serial, self).__init__()
-    self._nlayers = len(layers)
+    layers = list(_deep_flatten(layers))
+    # TODO(jonni): Consider flattening (unpacking) also embedded Serial layers.
     self._layers = layers
+    self._nlayers = len(layers)
 
   def call(self, x, params=(), **kwargs):
-    rng = kwargs.pop('rng', None)
-    rngs = (None,) * self._nlayers
-    if rng is not None:
-      rngs = backend.random.split(rng, self._nlayers)
+    rngs = _pop_rng_and_split(kwargs, self._nlayers)
     for layer, p, rng in zip(self._layers, params, rngs):
       x = layer(x, p, rng=rng, **kwargs)
     return x
 
-  def output_shape(self, input_shape):
-    cur_shape = input_shape
-    for layer in self._layers:
-      cur_shape = layer.output_shape_catch_errors(cur_shape)
-    return cur_shape
-
-  def new_parameters(self, input_shape, rng):
+  def new_parameters(self, input_shape, input_dtype, rng):
+    def MakeShapeType(shape, dtype):
+      if isinstance(dtype, (list, tuple)):
+        return tuple(MakeShapeType(s, t) for s, t in zip(shape, dtype))
+      return base.ShapeType(shape=shape, dtype=dtype)
     params = []
-    cur_shape = input_shape
+    pseudo_data = MakeShapeType(input_shape, input_dtype)
     for layer in self._layers:
       rng, layer_rng = backend.random.split(rng)
-      param = layer.initialize(cur_shape, layer_rng)
-      cur_shape = layer.output_shape(cur_shape)
+      cur_shape = base.nested_map(pseudo_data, lambda x: x.shape)
+      cur_dtype = base.nested_map(pseudo_data, lambda x: x.dtype)
+      param = layer.initialize(cur_shape, cur_dtype, layer_rng)
+      pparam = layer._params   # pylint: disable=protected-access
+      pseudo_data = layer.pseudo_call(pseudo_data, pparam)
       params.append(param)
     return params
 
 
-@base.layer()
-def Copy(x, **unused_kwargs):
-  """Copy layer, return the inputs."""
+@base.layer(stack_items_to_pass=0)
+def PrintShape(x, message='PrintShape', **unused_kwargs):
+  """No-op layer that prints the shape of the stack."""
+  print(message + ' ; stack shape = ' + str(base.shapes(x)))
   return x
 
 
-def Unnest(x):
-  """Helper: remove nesting in x, return a flat tuple."""
-  if not isinstance(x, (list, tuple)):
-    return (x,)
-  return tuple([z for y in x for z in Unnest(y)])  # pylint: disable=g-complex-comprehension
+@base.layer(stack_items_to_pass=0)
+def Dup(x, **unused_kwargs):
+  """Duplicate (copy) the first element on the stack."""
+  if isinstance(x, list):
+    return [x[0]] + x
+  if isinstance(x, tuple):
+    return tuple([x[0]] + list(x))
+  return [x, x]
 
 
-def UnnestShape(shape):
-  """Unnest a nested structure of shapes."""
-
-  class Shape(object):
-    """Since shapes are tuples, make them a class to not unnest too far."""
-
-    def __init__(self, shape):
-      self.shape = shape
-
-  def MakeShape(nested_shape):
-    """Make all shape-tuples in the nested object shape-classes."""
-    if isinstance(nested_shape[0], int):  # Not nested.
-      return Shape(nested_shape)
-    return [MakeShape(shape) for shape in nested_shape]
-
-  # Unnest on the level of shape-classes and bring back shape-tuples.
-  return tuple([y.shape for y in Unnest(MakeShape(shape))])
+@base.layer(stack_items_to_pass=0)
+def Swap(x, **unused_kwargs):
+  """Swap the first two element on the stack."""
+  if isinstance(x, list):
+    return [x[1], x[0]] + x[2:]
+  assert isinstance(x, tuple)
+  return tuple([x[1], x[0]] + list(x[2:]))
 
 
-@base.layer(output_shape=UnnestShape)
-def UnnestBranches(x, **unused_kwargs):
-  return Unnest(x)
+@base.layer(stack_items_to_pass=0)
+def _Top(x, **unused_kwargs):
+  """Top element from the stack."""
+  if isinstance(x, (list, tuple)):
+    return x[0]
+  return x
+
+
+@base.layer(stack_items_to_pass=0)
+def Drop(x, **unused_kwargs):
+  """Drop first element from the stack."""
+  result = x[1:]
+  if len(result) == 1:
+    return result[0]
+  return result
+
+
+@base.layer(stack_items_to_pass=0)
+def FlattenList(xs, **unused_kwargs):
+  """Flatten lists."""
+  return tuple(_deep_flatten(xs))
 
 
 # Re-ordering layer.
@@ -116,34 +181,53 @@ class Select(base.Layer):
     Select((0, (1, 1)))      = (x, (y, y))
     Select(((2, 0), (1, 1))) = ((z, x), (y, y))
 
-  By default (if no output is given) Select does nothing (Copy).
+  By default (if no output is given) Select does nothing. It is also possible
+  to name the inputs to access tuple elements, e.g.:
+
+  Select(inputs=('encoder', ('decoder', 'mask')), output='decoder')
+
+  will transform a tuple (x, (y, x)) into y.
 
   Args:
     x: the input tuple to re-order.
     params: layer parameters (unused).
     output: the specification of the output tuple: a nested tuple of ints.
+    input: the specification of the input tuple if we need to disassemble it.
     **kwargs: other arguments (unused).
 
   Returns:
     The re-ordered tuple with the same shape as output.
   """
 
-  def __init__(self, output=None):
+  def __init__(self, output=None, inputs=None):
     super(Select, self).__init__()
     self._output = output
+    if inputs is None:
+      self._map = lambda x, i: x[i]
+    else:
+      self._input_map = {}
+      self._build_input_map(inputs, [])
+      def InputMapping(x, i):
+        cur = x
+        for idx in self._input_map[i]:
+          cur = cur[idx]
+        return cur
+      self._map = InputMapping
+
+  def _build_input_map(self, inputs, prefix):
+    for i, e in enumerate(inputs):
+      if isinstance(e, (list, tuple)):
+        self._build_input_map(e, prefix + [i])
+      else:
+        self._input_map[e] = prefix + [i]
 
   def call(self, x, params=(), **kwargs):
     del params, kwargs
     if self._output is None:
       return x
-    return base.nested_map(self._output, lambda i: x[i])
+    return base.nested_map(self._output, lambda i: self._map(x, i))
 
-  def output_shape(self, input_shape):
-    if self._output is None:
-      return input_shape
-    return base.nested_map(self._output, lambda i: input_shape[i])
-
-  def new_parameters(self, input_shape, rng):
+  def new_parameters(self, input_shape, input_dtype, rng):
     return ()
 
 
@@ -151,71 +235,33 @@ class Branch(base.Layer):
   """Combinator for applying layers to copies of the input.
 
   This layer is often used to create parallel towers in neural networks:
-  * Branch(Copy(), Copy()) -- creates a pair with copied input
   * Branch(main, shortcut) -- start a residual tower (see Residual below)
 
   Args:
     *layers: a sequence of layers.
-    **kwlayers: a dictionary of layers.
 
   Returns:
     A new layer in which each of the given layers has been applied to
     a copy of the input independently.
   """
 
-  def __init__(self, *layers, **kwlayers):
+  def __init__(self, *layers):
     super(Branch, self).__init__()
-    if layers and kwlayers:
-      raise ValueError('Cannot specify a Branch with both a list and dict.')
-    layers = layers or kwlayers
+    layers = _ensure_sublayers(layers)
     self._nlayers = len(layers)
     self._layers = layers
 
   def call(self, x, params=(), **kwargs):
-    # Split the random number generators.
-    rng = kwargs.pop('rng', None)
-    rngs = (None,) * self._nlayers
-    if rng is not None:
-      rngs = backend.random.split(rng, self._nlayers)
-    # If layers are a list or a tuple, just apply them.
+    rngs = _pop_rng_and_split(kwargs, self._nlayers)
     if isinstance(self._layers, (list, tuple)):
       res = [layer(x, params=p, rng=r, **kwargs)
              for layer, p, r in zip(self._layers, params, rngs)]
       return tuple(res)
-    # If layers are a dictionary, apply to matching keys.
-    assert isinstance(self._layers, dict)
-    result, counter = {}, 0
-    for k in self._layers:
-      result[k] = self._layers[k](
-          x, params=params[k], rng=rngs[counter], **kwargs)
-      counter += 1
-    return result
 
-  def output_shape(self, input_shape):
-    output_shapes = []
-    # If the argument layers are a sequence, apply each to calculate shape.
-    if not isinstance(self._layers, dict):
-      for layer in self._layers:
-        output_shapes.append(layer.output_shape_catch_errors(input_shape))
-      return tuple(output_shapes)
-    # If layers are a dictionary, apply to the input shape.
-    result = {}
-    for k in self._layers:
-      result[k] = self._layers[k].output_shape_catch_errors(input_shape)
-    return result
-
-  def new_parameters(self, input_shape, rng):
+  def new_parameters(self, input_shape, input_dtype, rng):
     rngs = backend.random.split(rng, self._nlayers)
-    # If the argument layers are a sequence, create parameters for each one.
-    if not isinstance(self._layers, dict):
-      return [layer.initialize(input_shape, rng) for layer, rng
-              in zip(self._layers, rngs)]
-    # If the argument layers are a dictionary, create a dictionary too.
-    result, counter = {}, 0
-    for k in self._layers:
-      result[k] = self._layers[k].initialize(input_shape, rngs[counter])
-      counter += 1
-    return result
+    return [layer.initialize(input_shape, input_dtype, rng)
+            for layer, rng in zip(self._layers, rngs)]
 
 
 def _nested_op(inputs, op):  # pylint: disable=invalid-name
@@ -235,35 +281,49 @@ def _nested_op(inputs, op):  # pylint: disable=invalid-name
   return tuple(result_list)
 
 
-def _nested_sum(inputs):  # pylint: disable=invalid-name
-  return _nested_op(inputs=inputs, op=sum)
+def _binary_op(inputs, op):  # pylint: disable=invalid-name
+  """Helper: apply op to the first 2 elements."""
+  xs, rest = inputs[:2], inputs[2:]
+  s = _nested_op(xs, op)
+  if not rest:
+    return s
+  if not isinstance(s, (list, tuple)):
+    s = [s]
+  res = list(s) + list(rest)
+  # TODO(lukaszkaiser): should we drop this tuple/list distinction?
+  if isinstance(s, tuple):
+    res = tuple(res)
+  return res
 
 
-def _nested_product(inputs):  # pylint: disable=invalid-name
-  return _nested_op(
-      inputs=inputs, op=lambda xs: six.moves.reduce(operator.mul, xs))
-
-
-def _first_from_tuple_or_dict(tuple_or_dict):  # pylint: disable=invalid-name
-  """Helper: return the first element from a tuple or dict."""
-  for x in tuple_or_dict:
-    return x
-
-
-@base.layer(output_shape=_first_from_tuple_or_dict)
+@base.layer(stack_items_to_pass=0)
 def Add(x, **unused_kwargs):
+  """Add first and second element on the stack."""
+  # Here x is a list of tensors of the same shape, or nested structures.
+  return _binary_op(x, op=sum)
+
+
+@base.layer(stack_items_to_pass=0)
+def SubtractTop(x, **unused_kwargs):
+  """Subtract the first element on the stack from the second element."""
+  # Here x is a list of tensors of the same shape, or nested structures.
+  return _binary_op(x, op=lambda xs: xs[1] - xs[0])
+
+
+@base.layer(stack_items_to_pass=0)
+def Multiply(x, **unused_kwargs):
+  """Multiply first and second element on the stack."""
+  return _binary_op(x, op=lambda xs: six.moves.reduce(operator.mul, xs))
+
+
+@base.layer(stack_items_to_pass=0)
+def AddAll(x, **unused_kwargs):
   """Add branches elementwise."""
   # Here x is a list of tensors of the same shape, or nested structures.
-  return _nested_sum(x)
+  return _nested_op(x, op=sum)
 
 
-@base.layer(output_shape=_first_from_tuple_or_dict)
-def Multiply(x, **unused_kwargs):
-  """Multiply branches elementwise."""
-  return _nested_product(x)
-
-
-@base.layer(output_shape=_first_from_tuple_or_dict)
+@base.layer(stack_items_to_pass=0)
 def Gate(x, **unused_kwargs):
   """Implements a gating function on a (memory, gate, candidate) tuple.
 
@@ -283,17 +343,7 @@ def Gate(x, **unused_kwargs):
   return gate * state + (1.0 - gate) * candidate
 
 
-def _concatenate_shape(input_shape, axis=-1):  # pylint: disable=invalid-name
-  """Helper to determine the shape of Concatenate output."""
-  if isinstance(input_shape, dict):  # For named tuples, just use the values.
-    input_shape = list(input_shape.values())
-  ax = axis % len(input_shape[0])
-  concat_size = sum(shape[ax] for shape in input_shape)
-  out_shape = input_shape[0][:ax] + (concat_size,) + input_shape[0][ax+1:]
-  return out_shape
-
-
-@base.layer(output_shape=_concatenate_shape)
+@base.layer(stack_items_to_pass=0)
 def Concatenate(x, params, axis=-1, **kwargs):
   del params, kwargs
   if isinstance(x, dict):  # For dictionaries, just use the values.
@@ -320,173 +370,33 @@ class Parallel(base.Layer):
     if layers and kwlayers:
       raise ValueError('Cannot specify a Parallel with both a list and dict.')
     layers = layers or kwlayers
+    layers = _ensure_sublayers(layers)
     self._nlayers = len(layers)
     self._layers = layers
 
+  def stack_items_to_pass(self):
+    return self._nlayers
+
   def call(self, inputs, params=(), **kwargs):
-    # Split the random number generators.
-    rng = kwargs.pop('rng', None)
-    rngs = (None,) * self._nlayers
-    if rng is not None:
-      rngs = backend.random.split(rng, self._nlayers)
-    # If layers are a list or a tuple, just apply them.
-    if not isinstance(self._layers, dict):
-      res = [layer(x, params=p, rng=r, **kwargs)
-             for layer, x, p, r in zip(self._layers, inputs, params, rngs)]
-      # Return a list if inputs are a list and a tuple if inputs are a tuple.
-      if isinstance(inputs, list):
-        return res
-      return tuple(res)
-    # If layers are a dictionary, apply to matching keys.
-    result, counter = {}, 0
-    for k in inputs:
-      if k in self._layers:
-        result[k] = self._layers[k](
-            inputs[k], params=params[k], rng=rngs[counter], **kwargs)
-        counter += 1
-      else:
-        result[k] = inputs[k]
-    return result
+    rngs = _pop_rng_and_split(kwargs, self._nlayers)
+    # Note that zip silently truncates its result if lengths don't match.
+    assert len(inputs) == self._nlayers
+    assert len(params) == self._nlayers
+    assert len(rngs) == self._nlayers
+    return tuple(layer(x, params=p, rng=r, **kwargs)
+                 for layer, x, p, r in zip(self._layers, inputs, params, rngs))
 
-  def output_shape(self, input_shape):
-    output_shapes = []
-    # If the argument layers are a sequence, apply each to calculate shape.
-    if not isinstance(self._layers, dict):
-      for i, layer in enumerate(self._layers):
-        output_shapes.append(layer.output_shape_catch_errors(input_shape[i]))
-      return tuple(output_shapes)
-    # If layers are a dictionary, apply to matching keys in the input shape.
-    result = {}
-    for k in input_shape:
-      if k in self._layers:
-        result[k] = self._layers[k].output_shape_catch_errors(input_shape[k])
-      else:
-        result[k] = input_shape[k]
-    return result
-
-  def new_parameters(self, input_shape, rng):
+  def new_parameters(self, input_shape, input_dtype, rng):
     rngs = backend.random.split(rng, self._nlayers)
-    # If the argument layers are a sequence, create parameters for each one.
-    if not isinstance(self._layers, dict):
-      return [layer.initialize(shape, rng) for layer, shape, rng
-              in zip(self._layers, input_shape, rngs)]
-    # If the argument layers are a dictionary, create a dictionary too.
-    result, counter = {}, 0
-    for k in self._layers:
-      result[k] = self._layers[k].initialize(input_shape[k], rngs[counter])
-      counter += 1
-    return result
+    return [layer.initialize(shape, dtype, rng) for layer, shape, dtype, rng
+            in zip(self._layers, input_shape, input_dtype, rngs)]
 
 
 def Residual(*layers, **kwargs):
   """Constructs a residual version of layers, summing input to layers output."""
-  shortcut = kwargs.get('shortcut', Copy())  # pylint: disable=no-value-for-parameter
-  if len(layers) > 1:
-    return Serial(
-        Branch(Serial(*layers), shortcut),
-        Add()  # pylint: disable=no-value-for-parameter
-    )
-  elif len(layers) == 1:
-    return Serial(
-        Branch(layers[0], shortcut),
-        Add()  # pylint: disable=no-value-for-parameter
-    )
-  else:
-    raise ValueError('Empty residual combinator.')
-
-
-class Map(base.Layer):
-  """Combinator for applying a layer to a list or tuple.
-
-  Args:
-    layer: a layer to apply to each element.
-
-  Returns:
-    A new layer representing mapping layer to all elements of the input.
-  """
-
-  def __init__(self, layer, check_shapes=True):
-    super(Map, self).__init__()
-    self._layer = layer
-    # Generally a Map should be applied to lists where all elements have
-    # the same shape -- because self._layer will only be initialized once
-    # and it could have different parameters for different shapes. But there
-    # are valid cases -- e.g., when self._layer has no parameters -- where we
-    # can apply Map to different shapes -- set check_shapes=False in such cases.
-    self._check_shapes = check_shapes
-
-  def call(self, inputs, params=(), **kwargs):
-    rng = kwargs.pop('rng', None)
-    rngs = (None,) * len(inputs)
-    if rng is not None:
-      rngs = backend.random.split(rng, len(inputs))
-    result = [self._layer(x, params=params, rng=r, **kwargs)
-              for x, r in zip(inputs, rngs)]
-    if isinstance(inputs, list):
-      return result
-    return tuple(result)
-
-  def output_shape(self, input_shapes):
-    return tuple([self._layer.output_shape(shape) for shape in input_shapes])
-
-  def new_parameters(self, input_shape, rng):
-    first_shape = input_shape[0]
-    if self._check_shapes:
-      for shape in input_shape:
-        if shape != first_shape:
-          raise ValueError('Map layer can only be applied to list of elements '
-                           'with the same shapes. Shapes: %s' % str(shape))
-    return self._layer.initialize(first_shape, rng)
-
-
-class Rebatch(base.Layer):
-  """Combinator for treating the first `n` dims as batch.
-
-  Args:
-    layer: subclass of base.Layer, a layer to apply to the input.
-    num_batch_dims: int, the number of leading dimensions to consider as batch.
-
-  Returns:
-    A new layer that will reshape the input into a virtual batch, apply the
-    layer and unbatch the virtual batch.
-  """
-
-  def __init__(self, layer, num_batch_dims=1):
-    super(Rebatch, self).__init__()
-    self._layer = layer
-    self._num_batch_dims = num_batch_dims
-
-  def _modify_shape(self, input_shape):
-    input_shape = tuple(input_shape)
-    batch_dims, non_batch_dims = (input_shape[:self._num_batch_dims],
-                                  input_shape[self._num_batch_dims:])
-    new_batch_dim = six.moves.reduce(operator.mul, batch_dims)
-    return (new_batch_dim,) + non_batch_dims, batch_dims
-
-  def _unmodify_shape(self, input_shape, batch_dims):
-    return batch_dims + tuple(input_shape[1:])
-
-  def _modify(self, inp):
-    modified_shape, batch_dims = self._modify_shape(inp.shape)
-    return np.reshape(inp, modified_shape), batch_dims
-
-  def _unmodify(self, inp, batch_dims):
-    return np.reshape(inp, self._unmodify_shape(inp.shape, batch_dims))
-
-  def call(self, inp, params=(), **kwargs):
-    if isinstance(inp, (tuple, list)):
-      # TODO(afrozm): This should be easy to do though.
-      # Tip from Lukasz - base.nested_map(self._modify, inp)
-      raise ValueError("Rebatch doesn't support list/tuple inputs now.")
-    inp, batch_dims = self._modify(inp)
-    out = self._layer(inp, params=params, **kwargs)
-    return self._unmodify(out, batch_dims)
-
-  def output_shape(self, input_shape):
-    modified_shape, batch_dims = self._modify_shape(input_shape)
-    out = self._layer.output_shape(modified_shape)
-    return self._unmodify_shape(out, batch_dims)
-
-  def new_parameters(self, input_shape, rng):
-    modified_shape, _ = self._modify_shape(input_shape)
-    return self._layer.initialize(modified_shape, rng)
+  shortcut = kwargs.get('shortcut', _Top())  # pylint: disable=no-value-for-parameter
+  return [
+      Branch(shortcut, Serial(layers)),  # Use Serial here to flatten layers.
+      FlattenList(),  # pylint: disable=no-value-for-parameter
+      Add(),  # pylint: disable=no-value-for-parameter
+  ]

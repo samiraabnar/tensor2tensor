@@ -28,7 +28,7 @@ def SaturationCost(x, limit=0.9):
   return np.minimum(0, np.abs(x) - limit)
 
 
-@tl.layer(output_shape=lambda input_shape_list: input_shape_list)
+@tl.layer()
 def DiagonalGate(x, params, **kwargs):
   """Split channels in 3 parts. Shifts 1st and 3rd sections to left/right."""
   del params
@@ -54,28 +54,26 @@ def ConvDiagonalGRU(units, kernel_size=(3, 3)):
 
   return tl.GeneralGRUCell(
       candidate_transform=BuildConv,
-      memory_transform=DiagonalGate,
+      memory_transform_fn=DiagonalGate,
       gate_nonlinearity=tl.HardSigmoid,
       candidate_nonlinearity=tl.HardTanh)
 
 
-def NeuralGPU(feature_depth=96, steps=16, vocab_size=2):
+def NeuralGPU(d_feature=96, steps=16, vocab_size=2):
   """Implementation of Neural GPU: https://arxiv.org/abs/1702.08727.
 
   Args:
-    feature_depth: Number of memory channels
+    d_feature: Number of memory channels (dimensionality of feature embedding).
     steps: Number of times depthwise recurrence steps.
     vocab_size: Vocabulary size.
 
   Returns:
     A NeuralGPU Stax model.
   """
-  xs = []
-  xs.append(
-      tl.Embedding(feature_depth=feature_depth, vocab_size=vocab_size))
-  core = ConvDiagonalGRU(units=feature_depth)
-  xs.extend([core] * steps)
-  xs.append(tl.Dense(vocab_size))
-  xs.append(tl.LogSoftmax())
-
-  return tl.Serial(*xs)
+  core = ConvDiagonalGRU(units=d_feature)
+  return tl.Model(
+      tl.Embedding(d_feature=d_feature, vocab_size=vocab_size),
+      [core] * steps,
+      tl.Dense(vocab_size),
+      tl.LogSoftmax(),
+  )

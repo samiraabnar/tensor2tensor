@@ -140,7 +140,7 @@ def restore_state(output_dir):
   return State(step=step, params=params, history=history)
 
 
-def save_gin(output_dir, sw=None):
+def _save_gin(output_dir, sw=None):
   config_path = os.path.join(output_dir, "config.gin")
   config_str = gin.operative_config_str()
   with gfile.GFile(config_path, "w") as f:
@@ -168,13 +168,28 @@ def save_state(state, output_dir, keep=False):
   log("Model saved to %s" % params_file, stdout=False)
 
 
-def _save_replicated(opt_state, step, history, num_devices, output_dir, keep):
+def _save_replicated(opt_state, step, history, n_devices, output_dir, keep):
   """Save state but given a possibly replicated opt_state."""
-  if num_devices > 1:
-    unreplicate = lambda x: x.mean(0)
-    opt_state = layers.nested_map(opt_state, unreplicate)
-    save_state(State(params=opt_state, step=step, history=history),
-               output_dir, keep=keep)
+  if n_devices > 1:
+    first_replica = lambda x: x[0]
+    opt_state = layers.nested_map(opt_state, first_replica)
+  # This line, while optional, allows JAX to transfer arrays from the device to
+  # the host in parallel, which is particularly important for cloud TPU.
+  if backend.get_name() == "jax":
+    opt_state = jax.device_get(opt_state)
+  save_state(State(params=opt_state, step=step, history=history),
+             output_dir, keep=keep)
+
+
+def _print_n_params(opt_state, n_devices, step):
+  """Print out the number of parameters."""
+  sizes = layers.sizes(opt_state[0])
+  if n_devices > 1:
+    unreplicate = lambda x: x[0]
+    single_params = layers.nested_map(opt_state[0], unreplicate)
+    sizes = layers.sizes(single_params)
+  total_size = layers.nested_reduce(sizes, sum)
+  step_log(step, "Total trainable parameters size: %d" % total_size)
 
 
 # Metrics to calculate and report.
@@ -185,14 +200,14 @@ _METRICS = {
 }
 
 
-def evaluate_train_and_eval(step, inputs, predict_fun, eval_steps, rng,
+def evaluate_train_and_eval(step, inputs, predict_fn, eval_steps, rng,
                             train_sw=None, eval_sw=None, history=None):
   """Evalaute on train and eval data, and log metrics."""
   step_log(step, "Evaluation")
   train_metrics, eval_metrics = [
       evaluate(  # pylint: disable=g-complex-comprehension
           itertools.islice(input_stream(), eval_steps),
-          predict_fun,
+          predict_fn,
           _METRICS,
           rng)
       for input_stream in
@@ -205,14 +220,14 @@ def evaluate_train_and_eval(step, inputs, predict_fun, eval_steps, rng,
   return train_metrics, eval_metrics
 
 
-def evaluate(inputs_stream, predict_fun, metric_funs, rng):
+def evaluate(inputs_stream, predict_fn, metric_fns, rng):
   """Evaluate.
 
   Args:
     inputs_stream: iterable of inputs to evaluate on.
-    predict_fun: function from inputs to predictions. params should already be
+    predict_fn: function from inputs to predictions. params should already be
       partially applied.
-    metric_funs: dict from metric name to metric function, which takes inputs
+    metric_fns: dict from metric name to metric function, which takes inputs
       and predictions and returns a scalar metric value.
     rng: random number generator.
 
@@ -225,10 +240,34 @@ def evaluate(inputs_stream, predict_fun, metric_funs, rng):
   for inp in inputs_stream:
     count += 1
     rng, subrng = jax_random.split(rng)
-    preds = predict_fun(inp[0], rng=subrng)
-    for m, f in six.iteritems(metric_funs):
+    preds = predict_fn(inp[0], rng=subrng)
+    for m, f in six.iteritems(metric_fns):
       metrics[m] += f(inp, preds)
   return {m: v / count for (m, v) in six.iteritems(metrics)}
+
+
+def evaluate_loss_train_and_eval(step, inputs, compute_loss_fn, eval_steps,
+                                 rngs,
+                                 train_sw=None, eval_sw=None, history=None):
+  """More efficient evaluation that logs only the loss on train & eval data."""
+  step_log(step, "Evaluation")
+  train_eval_metrics = []
+  for input_stream in [inputs.train_eval_stream, inputs.eval_stream]:
+    total = 0.0
+    count = 0.0
+    for inp in itertools.islice(input_stream(), eval_steps):
+      loss_values, rngs = compute_loss_fn(inp, rngs)
+      total += float(numpy.mean(loss_values))
+      count += 1.0
+    metrics = {"loss": total / count}
+    train_eval_metrics.append(metrics)
+  train_metrics, eval_metrics = train_eval_metrics  # pylint: disable=unbalanced-tuple-unpacking
+  if train_sw:
+    log_metrics(train_metrics, train_sw, "train", step, history=history)
+  if eval_sw:
+    log_metrics(eval_metrics, eval_sw, "eval", step, history=history)
+  step_log(step, "Finished evaluation")
+  return train_metrics, eval_metrics
 
 
 def log_metrics(metrics, summ_writer, log_prefix, step, history=None):
@@ -293,22 +332,28 @@ def epochs(steps=None, epoch_steps=1):
       break
 
 
-def _jit_predict_fun(model_predict, num_devices):
+@gin.configurable
+def _jit_predict_fn(model_predict, n_devices, jit=True):
   """Use jit on model_predict if required."""
+
+  if n_devices == 1:
+    if jit:
+      return backend.jit(model_predict)
+    else:
+      return model_predict
+
+  # Multi-devices, pmap and run.
+  @functools.partial(backend.pmap, axis_name="batch")
+  def mapped_predict(x, params, rng):
+    return model_predict(x, params, rng=rng)
+
   def predict(x, params=(), rng=None):
     """Predict function jited and parallelized as requested."""
     # On one device, jit and run.
-    if num_devices == 1:
-      return backend.jit(model_predict)(x, params, rng=rng)
-
-    # Multi-devices, pmap and run.
-    @functools.partial(backend.pmap, axis_name="batch")
-    def mapped_predict(x, params, rng):
-      return model_predict(x, params, rng=rng)
     pred = mapped_predict(
-        reshape_by_device(x, num_devices),
+        reshape_by_device(x, n_devices),
         params,
-        jax_random.split(rng, num_devices))
+        jax_random.split(rng, n_devices))
     # Need to reduce the [device, per-device-batch, ...] tensors back to
     # a [batch, ...] tensor. The tensors may be nested.
     if not isinstance(pred, (list, tuple)):  # Not nested.
@@ -320,160 +365,188 @@ def _jit_predict_fun(model_predict, num_devices):
   return predict
 
 
-def _jit_update_fun(predict_fun, loss_fun, optimizer, num_devices):
+@gin.configurable
+def _jit_update_fn(predict_fn, loss_fn, optimizer, n_devices, jit=True):
   """Get jit-ed update function for loss, optimizer, learning rate function."""
-  if num_devices == 1:  # TODO(lukaszkaiser): remove branch when not needed.
+  if n_devices == 1:  # TODO(lukaszkaiser): remove branch when not needed.
     def single_update(i, opt_state, batch, rng):
       rng, subrng = jax_random.split(rng[0])
       params, opt_slots = opt_state
-      return optimizer.tree_update(i, backend.grad(loss_fun)(
-          params, batch, predict_fun, rng), params, opt_slots), [subrng]
-    return backend.jit(single_update)
+      return optimizer.tree_update(i, backend.grad(loss_fn)(
+          params, batch, predict_fn, rng), params, opt_slots), [subrng]
+    if jit:
+      return backend.jit(single_update)
+    else:
+      return single_update
 
   @functools.partial(backend.pmap, axis_name="batch")
   def mapped_update(i, opt_state, batch, rng):
     """This is a multi-device version of the update function above."""
-    # We assume all tensors have the first dimension = num_devices.
+    # We assume all tensors have the first dimension = n_devices.
     rng, subrng = jax_random.split(rng)
     params, opt_slots = opt_state
-    grads = backend.grad(loss_fun)(params, batch, predict_fun, rng)
+    grads = backend.grad(loss_fn)(params, batch, predict_fn, rng)
     grads = jax.tree_util.tree_map(
         lambda g: lax.psum(g, "batch"), grads)
     return optimizer.tree_update(i, grads, params, opt_slots), subrng
 
   def update(i, opt_state, batch, rng):
-    return mapped_update(numpy.repeat(i, num_devices), opt_state, batch, rng)
+    return mapped_update(numpy.repeat(i, n_devices), opt_state, batch, rng)
 
   return update
 
 
-def _reshape_by_device_single(x, num_devices):
-  """Reshape x into a shape [num_devices, ...]."""
+@gin.configurable
+def _jit_compute_loss_fn(predict_fn, loss_fn, n_devices, jit=True):
+  """Get jit-ed function that computes the loss."""
+  if n_devices == 1:  # TODO(lukaszkaiser): remove branch when not needed.
+    def single_compute_loss(opt_state, batch, rng):
+      rng, subrng = jax_random.split(rng[0])
+      return loss_fn(opt_state[0], batch, predict_fn, rng), [subrng]
+    if jit:
+      return backend.jit(single_compute_loss)
+    else:
+      return single_compute_loss
+
+  @functools.partial(backend.pmap, axis_name="batch")
+  def mapped_compute_loss(opt_state, batch, rng):
+    """This is a multi-device version of the update function above."""
+    # We assume all tensors have the first dimension = n_devices.
+    rng, subrng = jax_random.split(rng)
+    loss_val = loss_fn(opt_state[0], batch, predict_fn, rng)
+    return loss_val, subrng
+
+  def compute_loss(opt_state, batch, rng):
+    return mapped_compute_loss(
+        opt_state, reshape_by_device(batch, n_devices), rng)
+
+  return compute_loss
+
+
+def _reshape_by_device_single(x, n_devices):
+  """Reshape x into a shape [n_devices, ...]."""
   x_shape = list(x.shape)
   batch_size = x_shape[0]
-  batch_size_per_device = batch_size // num_devices
-  # We require that num_devices divides batch_size evenly.
-  if batch_size_per_device * num_devices != batch_size:
+  batch_size_per_device = batch_size // n_devices
+  # We require that n_devices divides batch_size evenly.
+  if batch_size_per_device * n_devices != batch_size:
     logging.fatal(
-        "We require that num_devices[%d] divides batch_size[%d] evenly.",
-        num_devices, batch_size)
+        "We require that n_devices[%d] divides batch_size[%d] evenly.",
+        n_devices, batch_size)
   # New shape.
-  new_shape_prefix = [num_devices, batch_size_per_device]
+  new_shape_prefix = [n_devices, batch_size_per_device]
   return np.reshape(x, new_shape_prefix + x_shape[1:])
 
 
-def reshape_by_device(x, num_devices):
-  """Reshape possibly nested x into a shape [num_devices, ...]."""
+def reshape_by_device(x, n_devices):
+  """Reshape possibly nested x into a shape [n_devices, ...]."""
   return layers.nested_map(
-      x, lambda x: _reshape_by_device_single(x, num_devices))
+      x, lambda x: _reshape_by_device_single(x, n_devices))
 
 
-@gin.configurable(blacklist=["output_dir"])
-def train(output_dir,
-          model=gin.REQUIRED,
-          loss_fun=loss,
-          inputs=trax_inputs.inputs,
-          optimizer=trax_opt.SM3,
-          lr_schedule=lr.MultifactorSchedule,
-          train_steps=1000,
-          save_steps=None,
-          eval_steps=10,
-          eval_frequency=100,
-          num_devices=None,
-          random_seed=None,
-          run_debug_step=False,
-          save_graphs=True,
-          save_backward_graph=False):
-  """Train the model on the inputs.
+@gin.configurable(whitelist=[])
+class Trainer(object):
+  """Trax trainer.
 
-  Args:
-    output_dir: Directory where to put the logs and checkpoints.
-    model: The model to train as a callable returning 2 callables, an init_fun
-      and apply_fun.
-    loss_fun: callable with signature: params, trax.inputs.Inputs, model, rng
-      -> loss.
-    inputs: callable returning trax.inputs.Inputs.
-    optimizer: The optimizer (see optimizers/base.py for signature).
-    lr_schedule: A learning rate schedule as a function that takes history and
-      returns a function from step to learning rate (a float).
-    train_steps: int, total number of training steps.
-    save_steps: list of integers. Keep a model file at each of the supplied save
-      steps.
-    eval_steps: int, num of steps per evaluation. If None or 0, eval disabled.
-    eval_frequency: int, how often to run evaluation (every eval_frequency
-      steps). If None or 0, eval disabled.
-    num_devices: how many devices to use (if None, default, use all available)
-    random_seed: the random seed to use; time/os dependent if None (default).
-    run_debug_step: bool, if True, will run the model and loss without @jit for
-      one step.
-    save_graphs: bool, if True, save computation graph to file.
-    save_backward_graph: bool, if True, save backward graph to file too.
-  Returns:
-    trax.State
+  A trainer allows to make training steps, train for full epochs,
+  save the training state and access evaluation data.
   """
-  if save_steps is None:
-    save_steps = []
-  device_count = jax.lib.xla_bridge.device_count()
-  num_devices = num_devices or device_count
-  # TODO(lukaszkaiser): remove this restriction when possible.
-  if num_devices != device_count:
-    raise ValueError("Jax cannot work yet with num_devices != all devices: "
-                     "%d != %d" % (num_devices, device_count))
-  rng = get_random_number_generator_and_set_seed(random_seed)
-  gfile.makedirs(output_dir)
-  # Create summary writers and history.
-  train_sw = jaxboard.SummaryWriter(os.path.join(output_dir, "train"))
-  eval_sw = jaxboard.SummaryWriter(os.path.join(output_dir, "eval"))
 
-  inputs = inputs(num_devices)
+  def __init__(self, model, loss_fn, optimizer, lr_schedule, inputs, output_dir,
+               random_seed=None, n_devices=None, save_steps=None):
+    if save_steps is None:
+      save_steps = []
+    self._save_steps = save_steps
+    device_count = jax.lib.xla_bridge.device_count()
+    n_devices = n_devices or device_count
+    # TODO(lukaszkaiser): remove this restriction when possible.
+    if n_devices != device_count:
+      raise ValueError("Jax cannot work yet with n_devices != all devices: "
+                       "%d != %d" % (n_devices, device_count))
+    self._n_devices = n_devices
+    rng = get_random_number_generator_and_set_seed(random_seed)
+    self._output_dir = output_dir
+    gfile.makedirs(output_dir)
+    # Create summary writers and history.
+    self._train_sw = jaxboard.SummaryWriter(os.path.join(output_dir, "train"))
+    self._eval_sw = jaxboard.SummaryWriter(os.path.join(output_dir, "eval"))
 
-  # Setup optimizer and model
-  state = restore_state(output_dir)
-  history = state.history
-  lr_fun = lr_schedule(history)
-  opt = optimizer(lr_fun)
-  model_train = model(mode="train")
-  model_predict_eval = model(mode="eval")
+    # Create input streams.
+    inputs = inputs(n_devices)
+    self._inputs = inputs
+    self._train_stream = inputs.train_stream()
 
-  # Setup state
-  step = state.step or 0
-  rng, init_rng = jax_random.split(rng)
-  rngs = jax_random.split(rng, num_devices)
-  first_shape = inputs.input_shape[0]
-  # If the inputs are a tuple/list, add [-1] (batch) to each element.
-  if isinstance(first_shape, (list, tuple)):
-    model_input_shape = tuple(
-        [tuple([-1] + list(shape)) for shape in inputs.input_shape])
-  else:  # Otherwise just add [-1] to the input shape.
-    model_input_shape = tuple([-1] + list(inputs.input_shape))
-  if state.params:
-    params = state.params[0]
-    opt_state = state.params
-  else:
-    params = model_train.initialize(model_input_shape, init_rng)
-    opt_state = (params, opt.tree_init(params))
-  if num_devices > 1:
-    replicate = lambda x: numpy.broadcast_to(x, (num_devices,) + x.shape)
-    opt_state = layers.nested_map(opt_state, replicate)
+    # Setup optimizer and model.
+    state = restore_state(output_dir)
+    history = state.history
+    self._lr_fn = lr_schedule(history)
+    opt = optimizer(self._lr_fn)
 
-  # jit model_predict and update so they're fast
-  jit_model_predict_eval = _jit_predict_fun(model_predict_eval, num_devices)
-  jit_update_fun = _jit_update_fun(model_train, loss_fun, opt, num_devices)
+    model_train = model(mode="train")
+    model_predict_eval = model(mode="eval")
 
-  train_stream = inputs.train_stream()
-  epoch_steps = [train_steps]  # Only training if eval_frequency is 0 or None.
-  if eval_frequency and eval_steps > 0:
-    epoch_steps = itertools.chain([1,  # first epoch only 1 step
-                                   eval_frequency - 1],
-                                  itertools.repeat(eval_frequency))
-  step_log(step, "Starting training using %d devices" % num_devices)
+    # Setup state.
+    step = state.step or 0
+    rng, init_rng = jax_random.split(rng)
+    self._rngs = jax_random.split(rng, n_devices)
+    first_shape = inputs.input_shape[0]
+    # If the inputs are a tuple/list, add [None] (batch) to each element.
+    if isinstance(first_shape, (list, tuple)):
+      model_input_shape = tuple(
+          tuple([None] + list(shape)) for shape in inputs.input_shape)
+    else:  # Otherwise just add [None] to the input shape.
+      model_input_shape = tuple([None] + list(inputs.input_shape))
+    # Change all None to 1 in input shape.
+    model_input_shape = layers.nested_map(
+        model_input_shape, lambda x: x if x else 1)
+    if state.params:
+      opt_state = state.params
+    else:
+      # JIT parameter initialization to avoid memory fragmentation
+      def initialize(input_shape, input_dtype, init_rng):
+        params = model_train.initialize(input_shape, input_dtype, init_rng)
+        opt_state = (params, opt.tree_init(params))
+        return opt_state
+      initialize = backend.jit(initialize, static_argnums=(0, 1))
+      opt_state = initialize(model_input_shape, inputs.input_dtype, init_rng)
+    if n_devices > 1:
+      replicate = lambda x: numpy.broadcast_to(x, (n_devices,) + x.shape)
+      opt_state = layers.nested_map(opt_state, replicate)
 
-  # Non-compiled debug step helps find problems in models easier.
-  if run_debug_step:
-    debug_loss = loss_fun(params, next(train_stream), model_train, rng)
-    step_log(step, "Debug step loss %.8f" % debug_loss)
+    # jit model_predict and update so they're fast
+    self._jit_model_predict_eval = _jit_predict_fn(
+        model_predict_eval, n_devices)
+    self._jit_update_fn = _jit_update_fn(model_train, loss_fn, opt, n_devices)
 
-  for epoch, epoch_steps in epochs(train_steps, epoch_steps):
+    self._step = step
+    self._model_train = model_train
+    self._model_predict_eval = model_predict_eval
+    self._loss_fn = loss_fn
+    self._optimizer = optimizer
+    self._opt_state = opt_state
+    self._history = history
+    self._lr_schedule = lr_schedule
+
+  @property
+  def step(self):
+    return self._step
+
+  @property
+  def n_devices(self):
+    return self._n_devices
+
+  @property
+  def state(self):
+    return State(params=self._opt_state, step=self._step, history=self._history)
+
+  def save_gin(self):
+    _save_gin(self._output_dir, self._train_sw)
+
+  def print_n_params(self):
+    _print_n_params(self._opt_state, self._n_devices, self._step)
+
+  def train_epoch(self, epoch_steps, eval_steps):
+    """Train for one epoch."""
     # Log separator
     print()
 
@@ -482,88 +555,207 @@ def train(output_dir,
 
     for _ in range(epoch_steps):
       # Train
-      next_train_batch = next(train_stream)
-      if num_devices > 1:  # TODO(lukaszkaiser): use everywhere when possible.
-        next_train_batch = reshape_by_device(next_train_batch, num_devices)
-      opt_state, rngs = jit_update_fun(step, opt_state, next_train_batch, rngs)
-      step += 1
+      next_train_batch = next(self._train_stream)
+      if self._n_devices > 1:  # TODO(lukaszkaiser): use everywhere if possible.
+        next_train_batch = reshape_by_device(next_train_batch, self._n_devices)
+      self._opt_state, self._rngs = self._jit_update_fn(
+          self._step, self._opt_state, next_train_batch, self._rngs)
+      self._step += 1
 
-      if step in save_steps:
-        _save_replicated(opt_state, step, history, num_devices,
-                         output_dir, True)
+      if self._step in self._save_steps:
+        _save_replicated(self._opt_state, self._step, self._history,
+                         self._n_devices, self._output_dir, True)
 
       # LR log
-      if step == 1 or step % 10 == 0:
-        train_sw.scalar("training/learning rate",
-                        lr_fun(step), step=step)
+      if self._step == 1 or self._step % 10 == 0:
+        # TODO(lukaszkaiser): it makes no sense to use an accelerator (e.g. TPU)
+        # in op-by-op mode just to compute the learning rate. However, there
+        # should be a cleaner approach that forceably swapping out the backend.
+        with backend.use_backend("numpy"):
+          self._train_sw.scalar("training/learning rate",
+                                self._lr_fn(self._step), step=self._step)
 
     # Timer
     epoch_time = time.time() - start_time
-    step_log(step, "Ran %d train steps in %0.2f secs" %
+    step_log(self._step, "Ran %d train steps in %0.2f secs" %
              (epoch_steps, epoch_time))
     if epoch_steps > 1:
-      train_sw.scalar("training/steps per second",
-                      epoch_steps / epoch_time, step=step)
-
-    # Print number of parameters
-    if step == 1:
-      sizes = layers.sizes(opt_state[0])
-      if num_devices > 1:
-        unreplicate = lambda x: x.mean(0)
-        single_params = layers.nested_map(opt_state[0], unreplicate)
-        sizes = layers.sizes(single_params)
-      total_size = layers.nested_reduce(sizes, sum)
-      step_log(step, "Total trainable parameters size: %d" % total_size)
+      self._train_sw.scalar("training/steps per second",
+                            epoch_steps / epoch_time, step=self._step)
 
     # Evaluate in parallel
-    evaluate_train_and_eval(
-        step=step,
-        inputs=inputs,
-        predict_fun=functools.partial(jit_model_predict_eval,
-                                      params=opt_state[0]),
-        eval_steps=eval_steps,
-        rng=rng,
-        train_sw=train_sw,
-        eval_sw=eval_sw,
-        history=history)
-
-    # Save computation graph (single-device only for now).
-    if save_graphs and step == 1 and num_devices == 1:
-      params = opt_state[0]
-      # Dump computation graphs to files.
-      forward_computation = jax.xla_computation(model_predict_eval)(
-          next_train_batch[0], params=params, rng=rng)
-      with gfile.GFile(os.path.join(output_dir, "forward.txt"), "w") as f:
-        f.write(forward_computation.GetHloText())
-      with gfile.GFile(os.path.join(output_dir, "forward.dot"), "w") as f:
-        f.write(forward_computation.GetHloDotGraph())
-      backward_computation = jax.xla_computation(jit_update_fun)(
-          step, opt_state, next_train_batch, rngs)
-      with gfile.GFile(os.path.join(output_dir, "backward.txt"), "w") as f:
-        f.write(backward_computation.GetHloText())
-      if save_backward_graph:  # Backward graphs can be large so we guard it.
-        with gfile.GFile(os.path.join(output_dir, "backward.dot"), "w") as f:
-          f.write(backward_computation.GetHloDotGraph())
+    self.evaluate(eval_steps)
 
     # Save state
-    _save_replicated(opt_state, step, history, num_devices,
-                     output_dir, False)
-
-    # Save Gin config
-    # Gin only tracks the used parameters, so we save it after the first epoch.
-    if epoch == 1:
-      save_gin(output_dir, train_sw)
-
-    # Update learning rate with new history
-    old_lr_fun = lr_fun
-    lr_fun = lr_schedule(history)
-    if lr_fun != old_lr_fun:  # For performance, only jit if there is a change.
-      opt = optimizer(lr_fun)
-      jit_update_fun = _jit_update_fun(model_train, loss_fun, opt, num_devices)
+    _save_replicated(self._opt_state, self._step, self._history,
+                     self._n_devices, self._output_dir, False)
 
     # Flush summary writers
-    train_sw.flush()
-    eval_sw.flush()
+    self._train_sw.flush()
+    self._eval_sw.flush()
 
-  step_log(step, "Training done")
-  return State(params=opt_state, step=step, history=history)
+  def evaluate(self, eval_steps):
+    _, rng = jax_random.split(self._rngs[0])
+    evaluate_train_and_eval(
+        step=self._step,
+        inputs=self._inputs,
+        predict_fn=functools.partial(self._jit_model_predict_eval,
+                                     params=self._opt_state[0]),
+        eval_steps=eval_steps,
+        rng=rng,
+        train_sw=self._train_sw,
+        eval_sw=self._eval_sw,
+        history=self._history)
+
+  def update_learning_rate(self):
+    old_lr_fn = self._lr_fn
+    self._lr_fn = self._lr_schedule(self._history)
+    if self._lr_fn != old_lr_fn:  # For performance only jit if it's changed.
+      opt = self._optimizer(self._lr_fn)
+      self._jit_update_fn = _jit_update_fn(
+          self._model_train, self._loss_fn, opt, self._n_devices)
+
+  def save_computation_graphs(self, save_backward_graph):
+    """Dump computation graphs to files."""
+    if self._n_devices != 1:
+      return  # TODO(lukaszkaiser): make this work with more devices.
+    next_train_batch = next(self._train_stream)
+    output_dir = self._output_dir
+    if self._n_devices > 1:
+      next_train_batch = reshape_by_device(next_train_batch, self._n_devices)
+    params = self._opt_state[0]
+    forward_computation = jax.xla_computation(self._model_predict_eval)(
+        next_train_batch[0], params=params, rng=self._rngs[0])
+    with gfile.GFile(os.path.join(output_dir, "forward.txt"), "w") as f:
+      f.write(forward_computation.GetHloText())
+    with gfile.GFile(os.path.join(output_dir, "forward.dot"), "w") as f:
+      f.write(forward_computation.GetHloDotGraph())
+    backward_computation = jax.xla_computation(self._jit_update_fn)(
+        self._step, self._opt_state, next_train_batch, self._rngs)
+    with gfile.GFile(os.path.join(output_dir, "backward.txt"), "w") as f:
+      f.write(backward_computation.GetHloText())
+    if save_backward_graph:  # Backward graphs can be large so we guard it.
+      with gfile.GFile(os.path.join(output_dir, "backward.dot"), "w") as f:
+        f.write(backward_computation.GetHloDotGraph())
+
+
+@gin.configurable(whitelist=[])
+class MemoryEfficientTrainer(Trainer):
+  """Trax trainer that aims to minimize memory usage.
+  """
+  # TODO(kitaev): memory efficiency should be a feature of the main Trainer
+  # class, but there's a separate class for now because this trainer only
+  # supports evaluating the loss (and not any other metrics).
+
+  def __init__(self, *args, **kwargs):
+    super(MemoryEfficientTrainer, self).__init__(*args, **kwargs)
+    # Model predictions can use large amounts of memory. The memory-efficient
+    # approach is to compute metrics on each replica and then aggregate. For now
+    # we only implement computing the loss, and not any other metrics.
+    self._jit_compute_loss = _jit_compute_loss_fn(
+        self._model_predict_eval, self._loss_fn, self._n_devices)
+
+  def evaluate(self, eval_steps):
+    # Evaluate only the loss function (a more efficient, jitted, implementation)
+    evaluate_loss_train_and_eval(
+        step=self._step,
+        inputs=self._inputs,
+        compute_loss_fn=functools.partial(self._jit_compute_loss,
+                                          self._opt_state),
+        eval_steps=eval_steps,
+        rngs=self._rngs,
+        train_sw=self._train_sw,
+        eval_sw=self._eval_sw,
+        history=self._history)
+
+  def update_learning_rate(self):
+    old_lr_fn = self._lr_fn
+    self._lr_fn = self._lr_schedule(self._history)
+    if self._lr_fn != old_lr_fn:
+      raise NotImplementedError(
+          "Loss function changed. Garbage collection for jitted functions is "
+          "not implemented in jax, so global accelerator memory allocated by "
+          "the jitted update function with the old loss cannot be reclaimed.")
+
+  def save_computation_graphs(self, save_backward_graph):
+    # TODO(kitaev): implement saving graphs while making sure that no op-by-op
+    # execution happens in the process.
+    del save_backward_graph
+    return
+
+
+@gin.configurable(blacklist=["output_dir"])
+def train(output_dir,
+          model=gin.REQUIRED,
+          loss_fn=loss,
+          inputs=trax_inputs.inputs,
+          optimizer=trax_opt.SM3,
+          lr_schedule=lr.MultifactorSchedule,
+          trainer_class=Trainer,
+          train_steps=1000,
+          save_steps=None,
+          eval_steps=10,
+          eval_frequency=100,
+          n_devices=None,
+          random_seed=None,
+          save_graphs=True,
+          save_backward_graph=False):
+  """Train the model on the inputs.
+
+  Args:
+    output_dir: Directory where to put the logs and checkpoints.
+    model: The model to train as a callable returning 2 callables, an init_fn
+      and apply_fn.
+    loss_fn: callable with signature: params, trax.inputs.Inputs, model, rng
+      -> loss.
+    inputs: callable returning trax.inputs.Inputs.
+    optimizer: The optimizer (see optimizers/base.py for signature).
+    lr_schedule: A learning rate schedule as a function that takes history and
+      returns a function from step to learning rate (a float).
+    trainer_class: The trainer class to use.
+    train_steps: int, total number of training steps.
+    save_steps: list of integers. Keep a model file at each of the supplied save
+      steps.
+    eval_steps: int, num of steps per evaluation. If None or 0, eval disabled.
+    eval_frequency: int, how often to run evaluation (every eval_frequency
+      steps). If None or 0, eval disabled.
+    n_devices: how many devices to use (if None, default, use all available)
+    random_seed: the random seed to use; time/os dependent if None (default).
+    save_graphs: bool, if True, save computation graph to file.
+    save_backward_graph: bool, if True, save backward graph to file too.
+  Returns:
+    trax.State
+  """
+  trainer = trainer_class(model, loss_fn, optimizer, lr_schedule, inputs,
+                          output_dir,
+                          random_seed=random_seed, n_devices=n_devices,
+                          save_steps=save_steps)
+
+  epoch_steps = [train_steps]  # Only training if eval_frequency is 0 or None
+  if eval_frequency and eval_steps > 0:
+    epoch_steps = itertools.chain([1,  # first epoch only 1 step
+                                   eval_frequency - 1],
+                                  itertools.repeat(eval_frequency))
+  step_log(trainer.step,
+           "Starting training using %d devices" % trainer.n_devices)
+
+  for _, epoch_steps in epochs(train_steps, epoch_steps):
+    trainer.train_epoch(epoch_steps, eval_steps)
+
+    # Update learning rate with new history
+    trainer.update_learning_rate()
+
+    # Bookkeeping we do at the first step
+    if trainer.step == 1:
+      # Print number of parameters
+      trainer.print_n_params()
+
+      # Save computation graph (single-device only for now)
+      if (save_graphs and backend.get_name() == "jax"):
+        trainer.save_computation_graphs(save_backward_graph)
+
+      # Save Gin config
+      trainer.save_gin()
+
+  step_log(trainer.step, "Training done")
+  return trainer.state
