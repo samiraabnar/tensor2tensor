@@ -1599,7 +1599,7 @@ def bottom_up_dot_product_attention(q,
   """
   activation_dtype = kwargs.get("activation_dtype")
   presence_q = kwargs.get("presence_q")
-  presence_k = kwargs.get("presence_q")
+  presence_k = kwargs.get("presence_k")
   current_depth = kwargs.get("current_depth")
   hparams = kwargs.get("hparams")
 
@@ -1608,7 +1608,8 @@ def bottom_up_dot_product_attention(q,
           values=[q, k, v]) as scope:
 
     if hparams.scale_factor is None:
-      hparams.scale_factor = tf.rsqrt(tf.to_float(common_layers.shape_list(q)[2]))
+      hparams.scale_factor = tf.rsqrt(
+        tf.to_float(common_layers.shape_list(q)[2]))
 
     assignment_logits = tf.matmul(q * hparams.scale_factor, k,
                                   transpose_b=True)  # [..., length_q, length_kv]
@@ -1622,20 +1623,20 @@ def bottom_up_dot_product_attention(q,
     number_of_heads = common_layers.shape_list(assignment_logits)[1]
     length_q = common_layers.shape_list(q)[-2]
     length_kv = common_layers.shape_list(k)[-2]
-    batch_size= common_layers.shape_list(k)[0]
+    batch_size = common_layers.shape_list(k)[0]
 
     if presence_q is None or hparams.reset_presence_q:  # [batch_size, length_q, 1]
       presence_q = tf.ones(shape=(tf.shape(q)[0], number_of_heads, length_q, 1))
 
     if presence_k is None:  # [batch_size, length_kv, 1]
-      presence_k = tf.ones(shape=(tf.shape(k)[0], number_of_heads, length_kv, 1))
-
+      presence_k = tf.ones(
+        shape=(tf.shape(k)[0], number_of_heads, length_kv, 1))
 
     q_presence_mat = tf.tile(presence_q,
                              [1, 1, 1, length_kv])
     k_presence_mat = tf.tile(
-        tf.transpose(presence_k, [0, 1, 3, 2]),
-        [1, 1, length_q, 1])
+      tf.transpose(presence_k, [0, 1, 3, 2]),
+      [1, 1, length_q, 1])
 
     # [batch_size, heads, length_q, length_kv]
     # we incorporate the presence of q (upper-layer nodes) after Softmax on q axis
@@ -1644,27 +1645,32 @@ def bottom_up_dot_product_attention(q,
 
     softmax_temp = hparams.assignment_softmax_temp
     if hparams.similarity_softmax_temp_decay_step > 0:
-      softmax_temp /=  (1.0 + hparams.similarity_softmax_temp_decay_rate * current_depth / hparams.similarity_softmax_temp_decay_step)
-    
+      softmax_temp /= (
+                1.0 + hparams.similarity_softmax_temp_decay_rate * current_depth / hparams.similarity_softmax_temp_decay_step)
+
     if hparams.similarity_softmax_over_all_heads:
-        assignment_logits = tf.reshape(assignment_logits, shape=(batch_size, number_of_heads*length_q,length_kv))
+      assignment_logits = tf.reshape(assignment_logits, shape=(
+        batch_size, number_of_heads * length_q, length_kv))
+
     if hparams.use_gumbel:
       assignment_weights = common_layers.gumbel_softmax(assignment_logits,
-                                          gumbel_noise_factor=0.8,
-                                          temperature=softmax_temp,
-                                          temperature_warmup_steps=None,
-                                          learn_temp= False,
-                                          straight_through=False,
-                                          name = "assignment_probs",
-                                          axis=-2)
+                                                        gumbel_noise_factor=0.8,
+                                                        temperature=softmax_temp,
+                                                        temperature_warmup_steps=None,
+                                                        learn_temp=False,
+                                                        straight_through=False,
+                                                        name="assignment_probs",
+                                                        axis=-2)
     else:
       assignment_weights = tf.nn.softmax(
-        assignment_logits / softmax_temp, axis=-2, name = "assignment_probs")
-     
+        assignment_logits / softmax_temp, axis=-2, name="assignment_probs")
+
     if hparams.similarity_softmax_over_all_heads:
-        assignment_weights = tf.reshape(assignment_weights, shape=(batch_size, number_of_heads, length_q,length_kv))
+      assignment_weights = tf.reshape(assignment_weights, shape=(
+        batch_size, number_of_heads, length_q, length_kv))
+
     assignment_weights = tf.identity(assignment_weights * q_presence_mat,
-                                       name="assignment_weights")
+                                     name="assignment_weights")
 
     # we incorporate the presence of k (lower-layer nodes)
     # output of tile: [batch_size, num_heads, length_q, length_kv]
@@ -1699,44 +1705,49 @@ def bottom_up_dot_product_attention(q,
       # aggregate_weights_over_heads = tf.reduce_sum(
       #  assignment_weights * k_presence_mat, axis=1)
       # [batch_size, heads, length_q, length_kv] -> [batch_size, heads, length_q]
-      total_assigned_weight_per_q_per_head = tf.reduce_sum(assignment_weights * k_presence_mat,
-                                                  axis=-1)
+      total_assigned_weight_per_q_per_head = tf.reduce_sum(
+        assignment_weights * k_presence_mat,
+        axis=-1)
 
       # TODO(Dehghani): what makes most sense?
-      presence_calc_fn = {'softmax': tf.nn.softmax,
+      presence_calc_fn = {'linear': tf.identity,
+                          'softmax': tf.nn.softmax,
                           'sigmoid': tf.nn.sigmoid,
-                          'tanh': tf.nn.tanh}
-
-      presence_calc_temp = {'softmax': hparams.presence_softmax_temp,
-                            'sigmoid': 1.0,
-                            'tanh': 1.0}
-                            
-      presence_calc_temp['softmax'] = hparams.presence_softmax_temp
-      if hparams.presence_softmax_temp_decay_step > 0:
-        presence_calc_temp['softmax'] /=  (1.0 + hparams.presence_softmax_temp_decay_rate * current_depth / hparams.presence_softmax_temp_decay_step)
+                          'tanh': tf.nn.tanh,
+                          'relu': tf.nn.relu,
+                          'leaky_relu': tf.nn.leaky_relu,
+                          'selu': tf.nn.selu
+                          }
 
       presence_logits = total_assigned_weight_per_q_per_head
       if hparams.normalize_presence_logits_by_sum:
         presence_logits = presence_logits / \
                           tf.expand_dims(
-                            tf.reduce_sum(total_assigned_weight_per_q_per_head, axis=-1),
+                            tf.reduce_sum(total_assigned_weight_per_q_per_head,
+                                          axis=-1),
                             axis=-1)
 
       if hparams.transform_presence_logits:
         presence_logits_shape = tf.shape(presence_logits)
         # [batch_size, heads, length_q] --> [batch_size * heads * length_q, 1]
-        presence_logits = tf.reshape(presence_logits, [-1,1])
+        presence_logits = tf.reshape(presence_logits, [-1, 1])
         presence_logits = common_layers.dense(presence_logits, 1, use_bias=True,
                                               name=name)
         presence_logits = tf.reshape(presence_logits, presence_logits_shape)
 
       if hparams.presence_calc_mode == 'softmax':
+        presence_softmax_temp = hparams.presence_softmax_temp
+        if hparams.presence_softmax_temp_decay_step > 0:
+          presence_softmax_temp /= (
+                  1.0 + hparams.presence_softmax_temp_decay_rate * current_depth / hparams.presence_softmax_temp_decay_step)
+
         new_q_presence = tf.nn.softmax(
-          presence_logits / presence_calc_temp[hparams.presence_calc_mode], axis=-1,
+          presence_logits / presence_softmax_temp,
+          axis=-1,
           name="q_presence")
       else:
         new_q_presence = presence_calc_fn[hparams.presence_calc_mode](
-          presence_logits / presence_calc_temp[hparams.presence_calc_mode],
+          presence_logits,
           name="q_presence")
 
       new_q_presence = tf.expand_dims(new_q_presence, axis=-1)
@@ -1754,7 +1765,7 @@ def bottom_up_dot_product_attention(q,
     # dotproduct: [length_q, embedding]
     values = tf.matmul(scaled_assignment_weights, v)
     new_similarities = tf.matmul(values, values,
-                                  transpose_b=True)  # [..., length_q, length_q]
+                                 transpose_b=True)  # [..., length_q, length_q]
     return values, new_q_presence
 
 
