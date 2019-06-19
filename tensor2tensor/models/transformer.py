@@ -1297,7 +1297,11 @@ class TransformerEncoder(t2t_model.T2TModel):
 @registry.register_model
 class BottomupTransformerEncoder(t2t_model.T2TModel):
   """Bottomup Transformer encoder only."""
-
+  
+  def __init__(self, *args, **kwargs):
+    super(BottomupTransformerEncoder, self).__init__(*args, **kwargs)
+    self.attention_weights = {}  # For visualizing attention heads.
+    
   def body(self, features):
     hparams = self._hparams
     inputs = features["inputs"]
@@ -1314,11 +1318,17 @@ class BottomupTransformerEncoder(t2t_model.T2TModel):
       encoder_input,
       encoder_self_attention_bias,
       hparams,
+      save_weights_to=self.attention_weights,
       nonpadding=features_to_nonpadding(features, "inputs"))
 
+    if hparams.output_mode == "MAXP":
+        encoder_output_presence = tf.nn.softmax(encoder_output_presence/100, axis=1)
+        
     tf.summary.histogram("encoder_output_presence", encoder_output_presence)
 
-    final_encoder_output = tf.multiply(encoder_output, encoder_output_presence)
+    encoder_output = common_attention.split_heads(encoder_output, hparams.num_heads)
+    final_encoder_output = common_attention.combine_heads(tf.multiply(encoder_output, encoder_output_presence))
+    
     final_encoder_output = tf.expand_dims(final_encoder_output, 2)
 
     return final_encoder_output
@@ -2869,21 +2879,33 @@ def transformer_imagenet64_memory_v0():
 
 
 def update_hparams_for_bottomup_transformer(hparams):
-
   hparams.add_hparam("assignment_softmax_temp", 1.0)
-  hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.1)
+  hparams.add_hparam("similarity_softmax_over_all_heads", True)
+  hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.5)
   hparams.add_hparam("similarity_softmax_temp_decay_step", 1)
-  hparams.add_hparam("transform_presence_logits", True)
-  hparams.add_hparam("presence_calc_mode", 'sigmoid') # | tanh | sigmoid
+  hparams.add_hparam("transform_presence_logits", False)
+  hparams.add_hparam("presence_calc_mode",
+                     'softmax')  # | tanh | sigmoid | softmax
   hparams.add_hparam("presence_softmax_temp", 1.0)
+  hparams.add_hparam("presence_softmax_temp_decay_rate", 0)
+  hparams.add_hparam("presence_softmax_temp_decay_step", 0.5)
   hparams.add_hparam("scale_factor", 1.0)
   hparams.add_hparam("reset_presence_q", True)
   hparams.add_hparam("scale_weights_with_presenc_k", True)
   hparams.add_hparam("update_presence", True)
   hparams.add_hparam("propagate_presence", False)
   hparams.add_hparam("normalize_presence_logits_by_sum", False)
+  hparams.add_hparam("output_mode", "AVG")
+  hparams.add_hparam("use_gumbel", True)
+
+  return hparams
 
 
+@registry.register_hparams
+def bottomup_transformer_tiny():
+  hparams = transformer_tiny()
+  hparams.num_heads = 2
+  hparams = update_hparams_for_bottomup_transformer(hparams)
   return hparams
 
 
@@ -2893,95 +2915,8 @@ def bottomup_transformer_tiny_tall():
   hparams = update_hparams_for_bottomup_transformer(hparams)
   return hparams
 
-@registry.register_hparams
-def bottomup_transformer_nop_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k= False
-  hparams.update_presence = False
-
-  return hparams
-
 
 @registry.register_hparams
-def bottomup_transformer_nok_simplep_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = False
-  hparams.update_presence = True
-
-  return hparams
-
-
-@registry.register_hparams
-def bottomup_transformer_nok_normp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = False
-  hparams.update_presence = True
-  hparams.propagate_presence = False
-  hparams.normalize_presence_logits_by_sum = True
-
-  return hparams
-
-@registry.register_hparams
-def bottomup_transformer_nok_pp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = False
-  hparams.update_presence = True
-  hparams.propagate_presence = True
-  hparams.normalize_presence_logits_by_sum = False
-
-  return hparams
-
-@registry.register_hparams
-def bottomup_transformer_nok_normpp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = False
-  hparams.update_presence = True
-  hparams.propagate_presence = True
-  hparams.normalize_presence_logits_by_sum = True
-
-  return hparams
-
-@registry.register_hparams
-def bottomup_transformer_wk_normp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = True
-  hparams.update_presence = True
-  hparams.propagate_presence = False
-  hparams.normalize_presence_logits_by_sum = True
-
-  return hparams
-
-@registry.register_hparams
-def bottomup_transformer_wk_pp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = True
-  hparams.update_presence = True
-  hparams.propagate_presence = True
-  hparams.normalize_presence_logits_by_sum = False
-
-  return hparams
-
-@registry.register_hparams
-def bottomup_transformer_wk_normpp_tiny_tall():
-  hparams = bottomup_transformer_tiny_tall()
-
-  hparams.reset_presence_q = True
-  hparams.scale_weights_with_presenc_k = True
-  hparams.update_presence = True
-  hparams.propagate_presence = True
-  hparams.normalize_presence_logits_by_sum = True
+def bottomup_transformer_tall():
+  hparams = transformer_tall()
   return hparams

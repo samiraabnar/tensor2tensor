@@ -791,6 +791,7 @@ def universal_transformer_lstm_tall():
 def universal_transformer_position_random_timing_tiny():
   hparams = universal_transformer_tiny()
   hparams.position_start_index = "random"
+  hparams.transformer_ffn_type = "sepconv"
   return hparams
 
 
