@@ -2851,7 +2851,7 @@ def transformer_imagenet64_memory_v0():
 
 
 def update_hparams_for_bottomup_transformer(hparams):
-  hparams.add_hparam("assignment_softmax_temp", 1.0)
+  hparams.add_hparam("similarity_softmax_temp", 1.0)
   hparams.add_hparam("similarity_softmax_over_all_heads", True)
   hparams.add_hparam("similarity_softmax_temp_decay_rate", 0.5)
   hparams.add_hparam("similarity_softmax_temp_decay_step", 1)
@@ -2878,6 +2878,7 @@ def bottomup_transformer_tiny():
   hparams = transformer_tiny()
   hparams.num_heads = 2
   hparams = update_hparams_for_bottomup_transformer(hparams)
+  hparams.learning_rate_constant = 1.0
   return hparams
 
 
@@ -2885,10 +2886,17 @@ def bottomup_transformer_tiny():
 def bottomup_transformer_tiny_tall():
   hparams = transformer_tiny_tall()
   hparams = update_hparams_for_bottomup_transformer(hparams)
+  hparams.learning_rate_constant = 1.0
+  hparams.learning_rate = 0.0005 #0.001
+  hparams.clip_grad_norm = 1.0
   return hparams
 
 
 @registry.register_hparams
 def bottomup_transformer_tall():
   hparams = transformer_tall()
+  hparams = update_hparams_for_bottomup_transformer(hparams)
+  hparams.learning_rate_constant = 1.0
+  hparams.learning_rate = 0.0005
+  hparams.clip_grad_norm = 1.0
   return hparams

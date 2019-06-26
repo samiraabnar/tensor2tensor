@@ -1643,7 +1643,7 @@ def bottom_up_dot_product_attention(q,
     # Note that because it is assignment instead of attention, the softmax is on the q axis instead of k axis
     # output of tile: [batch_size, num_heads, length_q, length_kv]
 
-    softmax_temp = hparams.assignment_softmax_temp
+    softmax_temp = hparams.similarity_softmax_temp
     if hparams.similarity_softmax_temp_decay_step > 0:
       softmax_temp /= (
                 1.0 + hparams.similarity_softmax_temp_decay_rate * current_depth / hparams.similarity_softmax_temp_decay_step)
