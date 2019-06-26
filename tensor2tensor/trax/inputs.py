@@ -43,10 +43,14 @@ import tensorflow_datasets as tfds
 #     the shape of examples is [batch_fun.eval_batch_size, ...]
 # * input_shape: the shape of inputs
 #     the [...] above, without batch size
+# * input_dtype: the data type of inputs
+
 
 Inputs = collections.namedtuple(
     "_Inputs",
-    ["train_stream", "train_eval_stream", "eval_stream", "input_shape"])
+    ["train_stream", "train_eval_stream", "eval_stream",
+     "input_shape", "input_dtype"]
+)
 
 # How many examples from the stream to skip at random during training.
 # For now, we skip at most 100K examples for efficiency.
@@ -54,18 +58,18 @@ Inputs = collections.namedtuple(
 _MAX_SKIP_EXAMPLES = 1e5
 
 
-@gin.configurable(blacklist=["num_devices"])
-def inputs(num_devices, dataset_name, data_dir=None, input_name=None,
-           num_chunks=0, append_targets=False):
+@gin.configurable(blacklist=["n_devices"])
+def inputs(n_devices, dataset_name, data_dir=None, input_name=None,
+           n_chunks=0, append_targets=False):
   """Make Inputs for built-in datasets.
 
   Args:
-    num_devices: how many devices to build the inputs for.
+    n_devices: how many devices to build the inputs for.
     dataset_name: a TFDS or T2T dataset name. If it's a T2T dataset name, prefix
       with "t2t_".
     data_dir: data directory.
     input_name: optional, name of the inputs from the dictionary.
-    num_chunks: optional, into how many pieces should we chunk (large inputs).
+    n_chunks: optional, into how many pieces should we chunk (large inputs).
     append_targets: optional, instead of inputs return a pair (inputs, targets)
       which is useful for autoregressive models.
 
@@ -76,38 +80,43 @@ def inputs(num_devices, dataset_name, data_dir=None, input_name=None,
   data_dir = os.path.expanduser(data_dir)
 
   (train_batches, train_eval_batches, eval_batches,
-   input_name, input_shape) = _train_and_eval_batches(
-       dataset_name, data_dir, input_name, num_devices)
+   input_name, input_shape, input_dtype) = _train_and_eval_batches(
+       dataset_name, data_dir, input_name, n_devices)
+
+  if input_dtype == np.uint8:  # TPUs don't like uint8s, we cast to ints.
+    input_dtype = np.int32
 
   def numpy_stream(dataset):
     return dataset_to_stream(
         dataset, input_name,
-        num_chunks=num_chunks, append_targets=append_targets)
+        n_chunks=n_chunks, append_targets=append_targets)
 
-  if num_chunks > 0:
+  if n_chunks > 0:
     length = input_shape[0]
     input_shape = tuple(
-        [tuple([length // num_chunks] + list(input_shape)[1:])] * num_chunks)
+        [tuple([length // n_chunks] + list(input_shape)[1:])] * n_chunks)
+    input_dtype = tuple([input_dtype] * n_chunks)
   if append_targets:
     # TODO(lukaszkaiser): remove the assumption that input and target
     # shapes are the same, which is used below for now.
     input_shape = (input_shape, input_shape)
+    input_dtype = (input_dtype, input_dtype)
 
   return Inputs(train_stream=lambda: numpy_stream(train_batches),
                 train_eval_stream=lambda: numpy_stream(train_eval_batches),
                 eval_stream=lambda: numpy_stream(eval_batches),
-                input_shape=input_shape)
+                input_shape=input_shape, input_dtype=input_dtype)
 
 
-@gin.configurable(blacklist=["num_devices"])
+@gin.configurable(blacklist=["n_devices"])
 def random_inputs(
-    num_devices,
+    n_devices,
     input_shape=gin.REQUIRED, input_dtype=np.int32, input_range=(0, 255),
     output_shape=gin.REQUIRED, output_dtype=np.int32, output_range=(0, 9)):
   """Make random Inputs for debugging.
 
   Args:
-    num_devices: how many devices to build the inputs for.
+    n_devices: how many devices to build the inputs for.
     input_shape: the shape of inputs (including batch dimension).
     input_dtype: the type of the inputs (int32 by default).
     input_range: the range of inputs (defaults to (0, 255)).
@@ -118,14 +127,14 @@ def random_inputs(
   Returns:
     trax.inputs.Inputs
   """
-  if input_shape[0] % num_devices != 0:
+  if input_shape[0] % n_devices != 0:
     tf.logging.fatal(
-        "num_devices[%d] should divide the first dimension of input_shape[%s]",
-        num_devices, input_shape)
-  if output_shape[0] % num_devices != 0:
+        "n_devices[%d] should divide the first dimension of input_shape[%s]",
+        n_devices, input_shape)
+  if output_shape[0] % n_devices != 0:
     tf.logging.fatal(
-        "num_devices[%d] should divide the first dimension of output_shape[%s]",
-        num_devices, output_shape)
+        "n_devices[%d] should divide the first dimension of output_shape[%s]",
+        n_devices, output_shape)
 
   def random_minibatches():
     """Generate a stream of random mini-batches."""
@@ -144,23 +153,24 @@ def random_inputs(
   return Inputs(train_stream=random_minibatches,
                 train_eval_stream=random_minibatches,
                 eval_stream=random_minibatches,
-                input_shape=input_shape_without_batch)
+                input_shape=input_shape_without_batch,
+                input_dtype=input_dtype)
 
 
-def dataset_to_stream(dataset, input_name, num_chunks=0, append_targets=False):
+def dataset_to_stream(dataset, input_name, n_chunks=0, append_targets=False):
   """Takes a tf.Dataset and creates a numpy stream of ready batches."""
   for example in tfds.as_numpy(dataset):
     inp, out = example[0][input_name], example[1]
     # Some accelerators don't handle uint8 well, cast to int.
     if isinstance(inp, np.uint8):
-      inp = inp.astype(np.uint32)
+      inp = inp.astype(np.int32)
     if isinstance(out, np.uint8):
-      out = out.astype(np.uint32)
+      out = out.astype(np.int32)
     if len(out.shape) > 1 and out.shape[-1] == 1:
       out = np.squeeze(out, axis=-1)
-    if num_chunks > 0:
-      inp = np.split(inp, num_chunks, axis=1)
-      out = np.split(out, num_chunks, axis=1)
+    if n_chunks > 0:
+      inp = np.split(inp, n_chunks, axis=1)
+      out = np.split(out, n_chunks, axis=1)
     if append_targets:
       inp = (inp, out)
     yield inp, out
@@ -186,7 +196,7 @@ def train_and_eval_dataset(dataset_name, data_dir, train_shuffle_files=True,
      * the train tf.Dataset
      * the eval tf.Dataset
      * information about features: a python dictionary with feature names
-         as keys and an object as value that provides .shape and .num_classes.
+         as keys and an object as value that provides .shape and .n_classes.
      * supervised_keys: information what's the input and what's the target,
          ie., a pair of lists with input and target feature names.
   """
@@ -214,9 +224,10 @@ def train_and_eval_dataset(dataset_name, data_dir, train_shuffle_files=True,
   return train, valid, info.features, keys
 
 
-def _make_info(shape_list, num_classes):
+def _make_info(shape_list, n_classes, dtype):
   """Create an info-like tuple for feature given some shapes and vocab size."""
-  feature_info = collections.namedtuple("FeatureInfo", ["shape", "num_classes"])
+  feature_info = collections.namedtuple(
+      "FeatureInfo", ["shape", "n_classes", "dtype"])
   cur_shape = list(shape_list[0])
   # We need to merge the provided shapes, put None where they disagree.
   for shape in shape_list:
@@ -226,7 +237,7 @@ def _make_info(shape_list, num_classes):
       if cur_shape[i] is not None:
         if shape[i] != cur_shape[i]:
           cur_shape[i] = None
-  return feature_info(cur_shape, num_classes)
+  return feature_info(cur_shape, n_classes, dtype)
 
 
 def _select_features(example, feature_list=None):
@@ -272,27 +283,29 @@ def _train_and_eval_dataset_v1(problem_name, data_dir):
     target_shapes.append(list(example["targets"].shape))
   input_vocab_size = hparams.vocab_size[input_key]
   target_vocab_size = hparams.vocab_size["targets"]
-  input_info = _make_info(input_shapes, input_vocab_size)
-  target_info = _make_info(target_shapes, target_vocab_size)
+  input_dtype = examples[0][input_key].dtype
+  target_dtype = examples[0]["targets"].dtype
+  input_info = _make_info(input_shapes, input_vocab_size, input_dtype)
+  target_info = _make_info(target_shapes, target_vocab_size, target_dtype)
   info = {input_key: input_info, "targets": target_info}
   return train_dataset, eval_dataset, info, supervised_keys
 
 
 @gin.configurable(blacklist=["dataset", "training", "shapes",
-                             "target_names", "num_devices"])
-def batch_fun(dataset, training, shapes, target_names, num_devices,
+                             "target_names", "n_devices"])
+def batch_fun(dataset, training, shapes, target_names, n_devices,
               batch_size_per_device=32, batch_size=None, eval_batch_size=32,
               bucket_length=32, buckets=None,
               buckets_include_inputs_in_length=False,
               batch_shuffle_size=128, max_eval_length=None):
   """Batching function."""
   del target_names
-  # Batch size is batch_size_per_device * num_devices unless given directly.
-  batch_size = batch_size or batch_size_per_device * num_devices
+  # Batch size is batch_size_per_device * n_devices unless given directly.
+  batch_size = batch_size or batch_size_per_device * n_devices
   # If bucketing is not specified, check if target shapes are variable.
   cur_batch_size = batch_size if training else eval_batch_size
-  # Make cur_batch_size divisible by num_devices.
-  cur_batch_size = max(cur_batch_size // num_devices, 1) * num_devices
+  # Make cur_batch_size divisible by n_devices.
+  cur_batch_size = max(cur_batch_size // n_devices, 1) * n_devices
   # Create heuristic buckets is none are specified.
   if buckets is None:
     variable_target_shapes = False
@@ -318,8 +331,8 @@ def batch_fun(dataset, training, shapes, target_names, num_devices,
                             cur_batch_size // 16, 1]
       if not training:
         bucket_batch_sizes[-2] = cur_batch_size // max_eval_length
-      # Make batch sizes divisible by num_devices.
-      bucket_batch_sizes = [max(b // num_devices, 1) * num_devices
+      # Make batch sizes divisible by n_devices.
+      bucket_batch_sizes = [max(b // n_devices, 1) * n_devices
                             for b in bucket_batch_sizes]
       buckets = (bucket_boundaries, bucket_batch_sizes)
 
@@ -342,9 +355,9 @@ def batch_fun(dataset, training, shapes, target_names, num_devices,
   return dataset
 
 
-# pylint: disable=unused-argument
 @gin.configurable(blacklist=["dataset", "training"])
 def cifar10_no_augmentation_preprocess(dataset, training):
+  del training
 
   def cast_image(features, targets):
     features["image"] = tf.cast(features["image"], tf.float32) / 255.0
@@ -354,8 +367,26 @@ def cifar10_no_augmentation_preprocess(dataset, training):
   return dataset
 
 
-# pylint: disable=unused-argument
 def no_preprocess(dataset, training):
+  del training
+  return dataset
+
+
+@gin.configurable(blacklist=["dataset", "training"])
+def concat_preprocess(dataset, training, pad_symbol=0):
+  """Pre-processing function that concatenates input and target for LM."""
+  del training
+
+  def concat(features, targets):
+    inp = features["inputs"]
+    pad = tf.expand_dims(tf.zeros_like(inp[0]) + pad_symbol, axis=0)
+    concat = tf.concat([pad, inp, pad, targets], axis=0)
+    # Note: we're updating existing features dictionary here, so make sure
+    # it is not re-used in some other ways outside of this function.
+    features["inputs"] = concat
+    return features, concat
+
+  dataset = dataset.map(concat)
   return dataset
 
 
@@ -406,7 +437,7 @@ def shuffle_and_batch_data(dataset,
                            target_names,
                            features_info,
                            training,
-                           num_devices,
+                           n_devices,
                            shuffle_buffer_size=1024,
                            preprocess_fun=no_preprocess):
   """Shuffle and batch the given dataset."""
@@ -429,25 +460,26 @@ def shuffle_and_batch_data(dataset,
   shapes = {k: features_info[k].shape for k in features_info}
   shapes = (shapes, shapes[target_names[0]])
   dataset = dataset.shuffle(shuffle_buffer_size)
-  dataset = batch_fun(dataset, training, shapes, target_names, num_devices)
+  dataset = batch_fun(dataset, training, shapes, target_names, n_devices)
   return dataset.prefetch(2)
 
 
-def _train_and_eval_batches(dataset, data_dir, input_name, num_devices):
+def _train_and_eval_batches(dataset, data_dir, input_name, n_devices):
   """Return train and eval batches with input name and shape."""
   (train_data, eval_data, features_info, keys) = train_and_eval_dataset(
       dataset, data_dir)
   input_names, target_names = keys[0], keys[1]
   train_batches = shuffle_and_batch_data(
       train_data, target_names, features_info, training=True,
-      num_devices=num_devices)
+      n_devices=n_devices)
   train_eval_batches = shuffle_and_batch_data(  # Data for eval-on-train.
       train_data, target_names, features_info, training=False,
-      num_devices=num_devices)
+      n_devices=n_devices)
   eval_batches = shuffle_and_batch_data(
       eval_data, target_names, features_info, training=False,
-      num_devices=num_devices)
+      n_devices=n_devices)
   input_name = input_name or input_names[0]
   input_shape = features_info[input_name].shape
+  input_dtype = features_info[input_name].dtype
   return (train_batches, train_eval_batches, eval_batches,
-          input_name, list(input_shape))
+          input_name, list(input_shape), input_dtype)

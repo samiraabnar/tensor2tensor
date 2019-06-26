@@ -56,7 +56,7 @@ transformer_bottomup_encoder = transformer_layers.transformer_bottomup_encoder
 
 def transformer_encode(encoder_function, inputs, target_space, hparams,
                        attention_weights=None, features=None, losses=None,
-                       **kwargs):
+                       prepare_encoder_fn=None, **kwargs):
   """Encode transformer inputs.
 
   Args:
@@ -69,6 +69,7 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
     features: optionally pass the entire features dictionary as well. This is
       needed now for "packed" datasets.
     losses: optional list onto which to append extra training losses
+    prepare_encoder_fn: optional, alternative to transformer_prepare_encoder.
     **kwargs: additional arguments to pass to encoder_function
 
   Returns:
@@ -80,8 +81,10 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
   """
   inputs = common_layers.flatten4d3d(inputs)
 
+  if not prepare_encoder_fn:
+    prepare_encoder_fn = transformer_prepare_encoder
   encoder_input, self_attention_bias, encoder_decoder_attention_bias = (
-      transformer_prepare_encoder(
+      prepare_encoder_fn(
           inputs, target_space, hparams, features=features))
 
   mlperf_log.transformer_print(
@@ -189,13 +192,16 @@ class Transformer(t2t_model.T2TModel):
     self._encoder_function = transformer_encoder
     self._decoder_function = transformer_decoder
     self._init_cache_fn = _init_transformer_cache
+    self._prepare_encoder_fn = transformer_prepare_encoder
+    self._prepare_decoder_fn = transformer_prepare_decoder
 
   def encode(self, inputs, target_space, hparams, features=None, losses=None):
     """Encode transformer inputs, see transformer_encode."""
     return transformer_encode(
         self._encoder_function, inputs, target_space, hparams,
         attention_weights=self.attention_weights,
-        features=features, losses=losses)
+        features=features, losses=losses,
+        prepare_encoder_fn=self._prepare_encoder_fn)
 
   def decode(self,
              decoder_input,
@@ -245,7 +251,7 @@ class Transformer(t2t_model.T2TModel):
     targets = features["targets"]
     targets_shape = common_layers.shape_list(targets)
     targets = common_layers.flatten4d3d(targets)
-    decoder_input, decoder_self_attention_bias = transformer_prepare_decoder(
+    decoder_input, decoder_self_attention_bias = self._prepare_decoder_fn(
         targets, hparams, features=features)
 
     # Not all subclasses of Transformer support keyword arguments related to
@@ -586,6 +592,7 @@ class Transformer(t2t_model.T2TModel):
             tf.less(i, partial_targets_length), forced_logits, lambda: ret)
       return ret, cache
 
+    eos_id = self.get_decode_end_id() or beam_search.EOS_ID
     ret = fast_decode_tpu(
         encoder_output=encoder_output,
         encoder_decoder_attention_bias=encoder_decoder_attention_bias,
@@ -598,7 +605,8 @@ class Transformer(t2t_model.T2TModel):
         top_beams=top_beams,
         alpha=alpha,
         batch_size=batch_size,
-        force_decode_length=self._decode_hparams.force_decode_length)
+        force_decode_length=self._decode_hparams.force_decode_length,
+        eos_id=eos_id)
     if partial_targets is not None:
       if beam_size <= 1 or top_beams <= 1:
         ret["outputs"] = ret["outputs"][:, partial_targets_length:]
@@ -614,6 +622,14 @@ class Transformer(t2t_model.T2TModel):
     different decoder start symbol. The id returned by this method is used to
     index the embedding matrix, and retrieve the vector that will be used as the
     first input to the decoder
+    """
+    return None
+
+  def get_decode_end_id(self):
+    """Returns the id of the output symbol that terminates decoding.
+
+    This method can be overridden by a different model. The id returned by this
+    method is used to check if the generation is complete during decoding.
     """
     return None
 
@@ -699,7 +715,7 @@ class Transformer(t2t_model.T2TModel):
             features=features)
       encoder_output = encoder_output[0]
       encoder_decoder_attention_bias = encoder_decoder_attention_bias[0]
-      partial_targets = None
+      partial_targets = features.get("partial_targets")
     else:
       # The problem has no inputs.
       encoder_output = None
@@ -712,6 +728,8 @@ class Transformer(t2t_model.T2TModel):
       if partial_targets is None:
         partial_targets = features["targets"]
       assert partial_targets is not None
+
+    if partial_targets is not None:
       partial_targets = common_layers.expand_squeeze_to_nd(partial_targets, 2)
       partial_targets = tf.to_int64(partial_targets)
       partial_targets_shape = common_layers.shape_list(partial_targets)
@@ -818,6 +836,7 @@ class Transformer(t2t_model.T2TModel):
       return ret, cache
 
     sos_id = self.get_decode_start_id() or 0
+    eos_id = self.get_decode_end_id() or beam_search.EOS_ID
 
     ret = fast_decode(
         encoder_output=encoder_output,
@@ -832,7 +851,8 @@ class Transformer(t2t_model.T2TModel):
         alpha=alpha,
         batch_size=batch_size,
         force_decode_length=self._decode_hparams.force_decode_length,
-        sos_id=sos_id)
+        sos_id=sos_id,
+        eos_id=eos_id)
     if partial_targets is not None:
       if beam_size <= 1 or top_beams <= 1:
         ret["outputs"] = ret["outputs"][:, partial_targets_length:]
@@ -1011,11 +1031,14 @@ def fast_decode_tpu(encoder_output,
       next_id = common_layers.sample_with_temperature(
           logits, temperature, keep_top)
 
-      hit_eos |= tf.equal(next_id, eos_id)
-
       log_prob_indices = tf.stack([tf.range(tf.to_int64(batch_size)), next_id],
                                   axis=1)
-      log_prob += tf.gather_nd(log_probs, log_prob_indices)
+      log_prob += tf.gather_nd(
+          log_probs, log_prob_indices) * (1 - tf.to_float(hit_eos))
+      # Note(thangluong): we purposely update hit_eos after aggregating log_prob
+      # There is a subtle detail here that we want to include log_probs up to
+      # (and inclusive of) the first eos generated, but not subsequent tokens.
+      hit_eos |= tf.equal(next_id, eos_id)
 
       next_id = tf.expand_dims(next_id, axis=1)
       decoded_ids = tf.transpose(decoded_ids)
@@ -1155,14 +1178,19 @@ def fast_decode(encoder_output,
         temperature = 0.0
       next_id = common_layers.sample_with_temperature(
           logits, temperature, keep_top)
-      hit_eos |= tf.equal(next_id, eos_id)
 
       log_prob_indices = tf.stack([tf.range(tf.to_int64(batch_size)), next_id],
                                   axis=1)
-      log_prob += tf.gather_nd(log_probs, log_prob_indices)
+      log_prob += tf.gather_nd(
+          log_probs, log_prob_indices) * (1 - tf.to_float(hit_eos))
+      # Note(thangluong): we purposely update hit_eos after aggregating log_prob
+      # There is a subtle detail here that we want to include log_probs up to
+      # (and inclusive of) the first eos generated, but not subsequent tokens.
+      hit_eos |= tf.equal(next_id, eos_id)
 
       next_id = tf.expand_dims(next_id, axis=1)
       decoded_ids = tf.concat([decoded_ids, next_id], axis=1)
+
       return i + 1, hit_eos, next_id, decoded_ids, cache, log_prob
 
     def is_not_finished(i, hit_eos, *_):

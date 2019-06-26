@@ -13,30 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for convolution layers."""
+"""Tests for Resnet models."""
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 from absl.testing import absltest
-from tensor2tensor.trax.layers import base
-from tensor2tensor.trax.layers import convolution
+from tensor2tensor.trax import layers as tl
+from tensor2tensor.trax.models import resnet
 
 
-class ConvolutionLayerTest(absltest.TestCase):
+class ResnetTest(absltest.TestCase):
 
-  def test_conv(self):
-    input_shape = (29, 5, 5, 20)
-    result_shape = base.check_shape_agreement(
-        convolution.Conv(30, (3, 3)), input_shape)
-    self.assertEqual(result_shape, (29, 3, 3, 30))
+  def test_resnet(self):
+    input_shape = (3, 256, 256, 3)
+    model = resnet.Resnet50(d_hidden=8, n_output_classes=10)
+    final_shape = tl.check_shape_agreement(model, input_shape)
+    self.assertEqual((3, 10), final_shape)
 
-  def test_conv_rebatch(self):
-    input_shape = (3, 29, 5, 5, 20)
-    result_shape = base.check_shape_agreement(
-        convolution.Conv(30, (3, 3)), input_shape)
-    self.assertEqual(result_shape, (3, 29, 3, 3, 30))
+  def test_wide_resnet(self):
+    input_shape = (3, 32, 32, 3)
+    model = resnet.WideResnet(n_blocks=1, n_output_classes=10)
+    final_shape = tl.check_shape_agreement(model, input_shape)
+    self.assertEqual((3, 10), final_shape)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()

@@ -19,7 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensor2tensor.trax.layers import combinators
+from tensor2tensor.trax.layers import combinators as cb
 from tensor2tensor.trax.layers import convolution
 from tensor2tensor.trax.layers import core
 
@@ -38,7 +38,7 @@ def GRUCell(units):
   """
   return GeneralGRUCell(
       candidate_transform=lambda: core.Dense(units=units),
-      memory_transform=combinators.Copy,
+      memory_transform_fn=None,
       gate_nonlinearity=core.Sigmoid,
       candidate_nonlinearity=core.Tanh)
 
@@ -62,13 +62,13 @@ def ConvGRUCell(units, kernel_size=(3, 3)):
 
   return GeneralGRUCell(
       candidate_transform=BuildConv,
-      memory_transform=combinators.Copy,
+      memory_transform_fn=None,
       gate_nonlinearity=core.Sigmoid,
       candidate_nonlinearity=core.Tanh)
 
 
 def GeneralGRUCell(candidate_transform,
-                   memory_transform=combinators.Copy,
+                   memory_transform_fn=None,
                    gate_nonlinearity=core.Sigmoid,
                    candidate_nonlinearity=core.Tanh,
                    dropout_rate_c=0.1,
@@ -87,7 +87,7 @@ def GeneralGRUCell(candidate_transform,
   Args:
     candidate_transform: Transform to apply inside the Candidate branch. Applied
       before nonlinearities.
-    memory_transform: Optional transformation on the memory before gating.
+    memory_transform_fn: Optional transformation on the memory before gating.
     gate_nonlinearity: Function to use as gate activation. Allows trying
       alternatives to Sigmoid, such as HardSigmoid.
     candidate_nonlinearity: Nonlinearity to apply after candidate branch. Allows
@@ -100,43 +100,27 @@ def GeneralGRUCell(candidate_transform,
   Returns:
     A model representing a GRU cell with specified transforms.
   """
-  return combinators.Serial(
-      combinators.Branch(
-          # s_{t-1} branch - optionally transform
-          # Typically is an identity.
-          memory_transform(),
+  gate_block = [  # u_t
+      candidate_transform(),
+      core.AddConstant(constant=sigmoid_bias),
+      gate_nonlinearity(),
+  ]
+  reset_block = [  # r_t
+      candidate_transform(),
+      core.AddConstant(constant=sigmoid_bias),  # Want bias to start positive.
+      gate_nonlinearity(),
+  ]
+  candidate_block = [
+      cb.Branch([], reset_block),
+      cb.Multiply(),  # Gate S{t-1} with sigmoid(candidate_transform(S{t-1}))
+      candidate_transform(),  # Final projection + tanh to get Ct
+      candidate_nonlinearity(),  # Candidate gate
 
-          # u_t (Update gate) branch
-          combinators.Serial(
-              candidate_transform(),
-              # Want bias to start out positive before sigmoids.
-              core.AddConstant(constant=sigmoid_bias),
-              gate_nonlinearity()
-          ),
-
-          # c_t (Candidate) branch
-          combinators.Serial(
-              combinators.Branch(
-                  combinators.Copy(),
-                  # r_t (Reset) Branch
-                  combinators.Serial(
-                      candidate_transform(),
-                      # Want bias to start out positive before sigmoids.
-                      core.AddConstant(constant=sigmoid_bias),
-                      gate_nonlinearity()
-                  )
-              ),
-              ## Gate S{t-1} with sigmoid(candidate_transform(S{t-1}))
-              combinators.Multiply(),
-
-              # Final projection + tanh to get Ct
-              candidate_transform(),
-              candidate_nonlinearity(),  # Candidate gate
-
-              # Only apply dropout on the C gate.
-              # Paper reports that 0.1 is a good default.
-              core.Dropout(rate=dropout_rate_c)
-          ),
-      ),
-      # Gate memory and candidate
-      combinators.Gate())
+      # Only apply dropout on the C gate. Paper reports 0.1 as a good default.
+      core.Dropout(rate=dropout_rate_c)
+  ]
+  memory_transform = memory_transform_fn() if memory_transform_fn else []
+  return cb.Serial([
+      cb.Branch(memory_transform, gate_block, candidate_block),
+      cb.Gate(),
+  ])

@@ -13,30 +13,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for convolution layers."""
+"""Tests for MLP."""
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 from absl.testing import absltest
-from tensor2tensor.trax.layers import base
-from tensor2tensor.trax.layers import convolution
+from tensor2tensor.trax import backend
+from tensor2tensor.trax import layers as tl
+from tensor2tensor.trax.models import mlp
 
 
-class ConvolutionLayerTest(absltest.TestCase):
+class MLPTest(absltest.TestCase):
 
-  def test_conv(self):
-    input_shape = (29, 5, 5, 20)
-    result_shape = base.check_shape_agreement(
-        convolution.Conv(30, (3, 3)), input_shape)
-    self.assertEqual(result_shape, (29, 3, 3, 30))
-
-  def test_conv_rebatch(self):
-    input_shape = (3, 29, 5, 5, 20)
-    result_shape = base.check_shape_agreement(
-        convolution.Conv(30, (3, 3)), input_shape)
-    self.assertEqual(result_shape, (3, 29, 3, 3, 30))
+  def test_mlp_forward_shape(self):
+    """Run the MLP model forward and check output shape."""
+    input_shape = (3, 28, 28, 1)
+    model = mlp.MLP(d_hidden=32, n_output_classes=10)
+    final_shape = tl.check_shape_agreement(model, input_shape)
+    self.assertEqual((3, 10), final_shape)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()
